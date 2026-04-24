@@ -1,0 +1,2925 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prismatica V2 — Lens Playground</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; background:#000; color:#eee; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; overflow:hidden; }
+  #app { position: fixed; inset: 0; }
+  #hud {
+    position: fixed; top: 12px; left: 14px; z-index: 10;
+    font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: #ddd; opacity: 0.8; pointer-events: none;
+  }
+  #hud b { font-weight: 600; letter-spacing: 0.12em; }
+  #hud span { color: #888; }
+  #status {
+    position: fixed; bottom: 12px; left: 80px; z-index: 10;
+    font-size: 11px; color: #888; font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    max-width: 70%;
+  }
+  #fps {
+    position: fixed; bottom: 12px; left: 14px; z-index: 10;
+    font-size: 11px; color: #888; font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    pointer-events: none;
+  }
+  canvas { display: block; }
+  .lil-gui { --background-color: #111; --widget-color: #1e1e1e; --focus-color: #333; --hover-color: #2a2a2a; --number-color: #f0a; --string-color: #0af; font-size: 11px; }
+  .lil-gui.root { --width: 300px; }
+  .lil-gui .title { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .fi { position: absolute; left: -9999px; }
+
+  /* --- render mode overlay ------------------------------------------------ */
+  /* Shown during offline render. Covers canvas + GUI so the compositor has less
+     work to do and the user gets a clean "rendering…" screen. */
+  #renderOverlay {
+    position: fixed; inset: 0; z-index: 100000; display: none;
+    background: #000; color: #eee;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    justify-content: center; align-items: center;
+  }
+  #renderOverlay.on { display: flex; }
+  body.render-mode canvas { display: none !important; }
+  body.render-mode .lil-gui { display: none !important; }
+  body.render-mode #hud, body.render-mode #fps, body.render-mode #aspectOverlay { display: none !important; }
+  body.render-mode #status { display: none !important; }
+  #renderOverlay .box {
+    text-align: center; max-width: 640px; padding: 0 32px;
+  }
+  #renderOverlay h1 {
+    margin: 0 0 8px 0; font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: #888; font-weight: 500;
+  }
+  #renderOverlay .title2 {
+    font-size: 32px; font-weight: 300; letter-spacing: 0.02em; margin: 0 0 36px 0;
+    background: linear-gradient(90deg, #fff, #888); -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  #renderOverlay .stats {
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    font-size: 13px; color: #aaa; margin-bottom: 20px; line-height: 1.8;
+  }
+  #renderOverlay .stats .num { color: #fff; }
+  #renderOverlay .bar {
+    width: 100%; height: 6px; background: #1a1a1a; border-radius: 3px;
+    overflow: hidden; margin-bottom: 24px;
+  }
+  #renderOverlay .barFill {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #3af, #f0a);
+    transition: width 120ms linear;
+  }
+  #renderOverlay .stopBtn {
+    appearance: none; background: transparent; color: #888; border: 1px solid #333;
+    padding: 10px 28px; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    font-family: inherit; cursor: pointer; border-radius: 4px;
+    transition: color 120ms, border-color 120ms;
+  }
+  #renderOverlay .stopBtn:hover { color: #fff; border-color: #666; }
+  #renderOverlay .hint { color: #555; font-size: 11px; margin-top: 16px; letter-spacing: 0.08em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="hud"><b>Prismatica V2</b> <span>— lens playground</span></div>
+<div id="status">loading…</div>
+
+<div id="renderOverlay">
+  <div class="box">
+    <h1>Exporting Video</h1>
+    <div class="title2" id="roTitle">Rendering…</div>
+    <div class="bar"><div class="barFill" id="roBarFill"></div></div>
+    <div class="stats" id="roStats">preparing encoder…</div>
+    <button class="stopBtn" id="roStopBtn">■ Stop render</button>
+    <div class="hint">keep this tab in the foreground for fastest render</div>
+  </div>
+</div>
+
+<input type="file" id="fileImage" class="fi" accept="image/*" />
+<input type="file" id="fileVideo" class="fi" accept="video/*" />
+<input type="file" id="fileImport" class="fi" accept="application/json" />
+<input type="file" id="fileLogo"  class="fi" accept="image/*,.svg" />
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.170.0/examples/jsm/",
+    "lil-gui": "https://unpkg.com/lil-gui@0.19.2/dist/lil-gui.esm.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import GUI from 'lil-gui';
+
+const statusEl = document.getElementById('status');
+const setStatus = (t) => { statusEl.textContent = t; };
+
+// -------------------------------------------------------------------------
+// Renderer + scene
+// -------------------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+
+const QUALITY_PRESETS = {
+  eco:      { pixelRatio: 1.0, transmissionScale: 0.4 },
+  balanced: { pixelRatio: 1.5, transmissionScale: 0.7 },
+  high:     { pixelRatio: 2.0, transmissionScale: 1.0 },
+  ultra:    { pixelRatio: Math.min(window.devicePixelRatio, 3.0), transmissionScale: 1.0 },
+};
+function applyRenderQuality(name) {
+  const q = QUALITY_PRESETS[name] || QUALITY_PRESETS.high;
+  renderer.setPixelRatio(q.pixelRatio);
+  renderer.transmissionResolutionScale = q.transmissionScale;
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  if (typeof composer !== 'undefined') {
+    composer.setPixelRatio(q.pixelRatio);
+    composer.setSize(window.innerWidth, window.innerHeight);
+    bloomPass.setSize(window.innerWidth, window.innerHeight);
+  }
+}
+// Transmission rendering is the main cost. Halve its internal render target.
+renderer.transmissionResolutionScale = 1.0;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050505);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 1, 5000);
+camera.position.set(0, 220, 900);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0, 0);
+controls.minDistance = 200;
+controls.maxDistance = 3000;
+
+// While the user drags the camera, auto orbit/zoom/pan step aside so the
+// mouse wins. On release, the motion recenters on wherever the camera ended up.
+let userInteractingWithCamera = false;
+controls.addEventListener('start', () => {
+  userInteractingWithCamera = true;
+  // Undo any active pan offset so the on-screen camera position matches the
+  // real world position (otherwise the drag starts from a stale point).
+  if (typeof updateCameraMotion !== 'undefined' && updateCameraMotion._lastPanDy) {
+    camera.position.y -= updateCameraMotion._lastPanDy;
+    updateCameraMotion._lastPanDy = 0;
+  }
+});
+controls.addEventListener('end', () => {
+  userInteractingWithCamera = false;
+  // Force auto-motion to recapture "home" from the new camera pose.
+  orbitHomeAzimuth = null;
+  orbitHomeElevation = null;
+  orbitPhase = 0;
+  zoomBaseDist = null;
+  zoomPhase = 0;
+  panPhase = 0;
+});
+
+// -------------------------------------------------------------------------
+// Post-processing (bloom)
+// -------------------------------------------------------------------------
+const postRT = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
+  samples: 4,
+  type: THREE.HalfFloatType,
+  colorSpace: THREE.SRGBColorSpace,
+});
+const composer = new EffectComposer(renderer, postRT);
+composer.setPixelRatio(renderer.getPixelRatio());
+composer.setSize(window.innerWidth, window.innerHeight);
+const renderPass = new RenderPass(scene, camera);
+composer.addPass(renderPass);
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  0.5,   // strength
+  0.7,   // radius
+  0.82,  // threshold
+);
+bloomPass.enabled = false;
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+function renderFrame() { composer.render(); }
+
+const key = new THREE.DirectionalLight(0xffffff, 1.1);
+key.position.set(400, 600, 800);
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x66aaff, 0.5);
+rim.position.set(-600, 200, -400);
+scene.add(rim);
+
+// -------------------------------------------------------------------------
+// LED shader
+// -------------------------------------------------------------------------
+const panelTexture = { value: null };
+const hasTexture = { value: 0 };
+
+const ledShader = {
+  uniforms: {
+    uTime:       { value: 0 },
+    uMode:       { value: 1 },
+    uScale:      { value: 40.0 },
+    uSpeed:      { value: 0.5 },
+    uBrightness: { value: 2.4 },
+    uHueShift:   { value: 0.0 },
+    uTex:        panelTexture,
+    uHasTex:     hasTexture,
+    uSqThickness:{ value: 0.5 },
+    uSqSoftness: { value: 0.3 },
+    uSqMono:     { value: 0 },
+    uSqDir:      { value: 1.0 },
+    uSqHueSpread:{ value: 2.5 },
+    // Gradient overlay for Squares mode. Baked into the panel texture so the
+    // lens refracts/magnifies it naturally as the camera moves — that's the
+    // "stretchy" effect that shows off when filming from different angles.
+    uSqGrad:     { value: 0 },
+    uSqGradA:    { value: new THREE.Color(0xff2e88) },  // magenta
+    uSqGradB:    { value: new THREE.Color(0x00e0ff) },  // cyan
+    uSqGradC:    { value: new THREE.Color(0xffd34d) },  // warm gold
+    uSqGradAxis: { value: 0 },  // 0=radial 1=horiz 2=vert 3=diagonal 4=angle
+    uSqGradScale:{ value: 1.0 },
+    uSqGradFlow: { value: 0.15 },
+    uPanelSmooth:{ value: 1 },  // 0 = hard cells, 1 = 4-tap AA (kills scan-line aliasing)
+  },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    precision highp float;
+    varying vec2 vUv;
+    uniform float uTime;
+    uniform int   uMode;
+    uniform float uScale;
+    uniform float uSpeed;
+    uniform float uBrightness;
+    uniform float uHueShift;
+    uniform sampler2D uTex;
+    uniform int uHasTex;
+    uniform float uSqThickness;
+    uniform float uSqSoftness;
+    uniform int   uSqMono;
+    uniform float uSqDir;
+    uniform float uSqHueSpread;
+    uniform int   uSqGrad;
+    uniform vec3  uSqGradA;
+    uniform vec3  uSqGradB;
+    uniform vec3  uSqGradC;
+    uniform int   uSqGradAxis;
+    uniform float uSqGradScale;
+    uniform float uSqGradFlow;
+    uniform int   uPanelSmooth;
+
+    vec3 hsv2rgb(vec3 c) {
+      vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+      vec3 p = abs(fract(c.xxx + K.xyz)*6.0 - K.www);
+      return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    }
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); }
+
+    vec3 computeLedColor(vec2 uv, float t) {
+      vec2 px = floor(uv * uScale);
+      vec2 puv = (px + 0.5) / uScale;
+      vec3 col = vec3(0.0);
+
+      if (uMode == 0) {
+        float c = mod(px.x + px.y, 2.0);
+        float h = c * 0.5 + uHueShift + t * 0.1;
+        col = hsv2rgb(vec3(fract(h), 0.85, 0.9));
+      } else if (uMode == 1) {
+        float h = (px.x / uScale) + (px.y / uScale) * 0.5 + uHueShift + t * 0.2;
+        col = hsv2rgb(vec3(fract(h), 0.9, 1.0));
+      } else if (uMode == 2) {
+        float v = 0.5 + 0.5 * sin(puv.x * 12.0 + t * 2.0) * cos(puv.y * 8.0 - t * 1.3);
+        col = hsv2rgb(vec3(fract(v + uHueShift), 0.85, v));
+      } else if (uMode == 3) {
+        vec2 c = puv - 0.5;
+        float r = length(c);
+        float ringFreq = uScale * 0.6;
+        float v = 0.5 + 0.5 * sin(r * ringFreq - t * 3.0);
+        col = hsv2rgb(vec3(fract(r * 2.0 + uHueShift + t * 0.05), 0.85, v));
+      } else if (uMode == 4) {
+        float v = 0.5 + 0.5 * sin(puv.y * 40.0 + t * 6.0);
+        col = vec3(v, v * 0.6, v * 0.3);
+      } else if (uMode == 5) {
+        vec2 q = px + floor(t * 6.0);
+        float h = hash(q);
+        col = hsv2rgb(vec3(fract(h + uHueShift), 0.9, 1.0));
+      } else if (uMode == 6) {
+        col = vec3(1.0);
+      } else if (uMode == 9) {
+        vec2 cell = floor(uv * uScale);
+        vec2 cp = fract(uv * uScale) - 0.5;
+        float h = hash(cell + floor(t * 0.3));
+        float brightness = 0.0;
+        if (h > 0.88) {
+          float tw = 0.5 + 0.5 * sin(t * 5.0 + h * 50.0);
+          float d = length(cp);
+          float core = smoothstep(0.45, 0.0, d * 4.0);
+          float cross = max(smoothstep(0.015, 0.0, abs(cp.x)), smoothstep(0.015, 0.0, abs(cp.y))) * smoothstep(0.5, 0.0, d);
+          brightness = (core * core + cross * 0.6) * (0.4 + 0.6 * tw);
+        }
+        vec3 tint = hsv2rgb(vec3(fract(h * 2.0 + uHueShift), 0.5, 1.0));
+        col = brightness * mix(vec3(1.0), tint, 0.5);
+      } else if (uMode == 10) {
+        vec2 c = puv - 0.5;
+        float r = length(c);
+        float a = atan(c.y, c.x);
+        float arms = 3.0;
+        float spiral = sin(a * arms + log(r + 0.01) * 9.0 - t * 1.8);
+        float arm = smoothstep(-0.1, 0.8, spiral) * exp(-r * 2.4);
+        float core = exp(-r * 16.0) * 1.6;
+        float hue = fract(0.62 + r * 0.6 + uHueShift);
+        col = hsv2rgb(vec3(hue, 0.75, arm)) + vec3(1.0, 0.85, 0.6) * core;
+      } else if (uMode == 11) {
+        vec2 c = puv - 0.5;
+        float r = length(c);
+        float freq = uScale * 1.2;
+        float rings = sin(r * freq - t * 4.0);
+        float v = smoothstep(0.0, 0.9, rings);
+        float hue = fract(r * 4.0 + t * 0.12 + uHueShift);
+        col = hsv2rgb(vec3(hue, 0.9, v));
+      } else if (uMode == 12) {
+        vec2 c = puv - 0.5;
+        float a = atan(c.y, c.x);
+        float r = length(c);
+        float spokes = 12.0;
+        float ray = 0.5 + 0.5 * cos(a * spokes - t * 1.0);
+        float v = pow(ray, 3.0) * smoothstep(0.55, 0.0, r) * (0.6 + 0.4 * sin(t * 2.0 + r * 20.0));
+        col = hsv2rgb(vec3(fract(a / 6.2832 + t * 0.1 + uHueShift), 0.85, v));
+      } else if (uMode == 13) {
+        vec2 c = abs(uv - 0.5);
+        float d = max(c.x, c.y);
+        float freq = uScale * 0.5;
+        float phase = d * freq - t * 3.0 * uSqDir;
+        // triangular wave in [0,1], symmetric band profile
+        float tri = 1.0 - abs(fract(phase / 6.2831853) * 2.0 - 1.0);
+        // duty cycle via uSqThickness (0 = thin line, 1 = mostly filled)
+        float halfWidth = clamp(uSqThickness, 0.02, 0.98);
+        float soft = clamp(uSqSoftness, 0.0, 1.0) * 0.5 + 0.001;
+        float edge = smoothstep(halfWidth - soft, halfWidth, tri);
+        if (uSqGrad == 1) {
+          // Sample a 3-stop gradient (A→B→C→A) along the chosen axis.
+          // Baked into the panel so the lens stretches/magnifies it on camera moves.
+          float g;
+          if      (uSqGradAxis == 0) g = length(uv - 0.5) * 1.4142;                        // radial
+          else if (uSqGradAxis == 1) g = uv.x;                                             // horizontal
+          else if (uSqGradAxis == 2) g = uv.y;                                             // vertical
+          else if (uSqGradAxis == 3) g = (uv.x + uv.y) * 0.5;                              // diagonal
+          else                        g = atan(uv.y - 0.5, uv.x - 0.5) / 6.2831853 + 0.5;  // angular
+          g = fract(g * uSqGradScale + t * uSqGradFlow + uHueShift);
+          float s = g * 3.0;
+          vec3 g0, g1; float lt;
+          if (s < 1.0)      { g0 = uSqGradA; g1 = uSqGradB; lt = s; }
+          else if (s < 2.0) { g0 = uSqGradB; g1 = uSqGradC; lt = s - 1.0; }
+          else              { g0 = uSqGradC; g1 = uSqGradA; lt = s - 2.0; }
+          vec3 grad = mix(g0, g1, lt);
+          vec3 mono = vec3(edge);
+          col = mix(grad * edge, mono, float(uSqMono));
+        } else {
+          float hue = fract(d * uSqHueSpread - t * 0.15 + uHueShift);
+          vec3 colourful = hsv2rgb(vec3(hue, 0.9, edge));
+          vec3 mono = vec3(edge);
+          col = mix(colourful, mono, float(uSqMono));
+        }
+      } else if (uMode == 7 || uMode == 8) {
+        vec2 samp = (uScale >= 999.0) ? uv : puv;
+        vec3 tex = (uHasTex == 1) ? texture2D(uTex, samp).rgb : vec3(0.2);
+        col = tex;
+        if (uHueShift != 0.0) {
+          float mx = max(max(col.r, col.g), col.b);
+          float mn = min(min(col.r, col.g), col.b);
+          float v = mx;
+          float s = mx > 0.0 ? (mx - mn) / mx : 0.0;
+          float h = 0.0;
+          if (mx != mn) {
+            if (mx == col.r) h = (col.g - col.b) / (mx - mn);
+            else if (mx == col.g) h = 2.0 + (col.b - col.r) / (mx - mn);
+            else h = 4.0 + (col.r - col.g) / (mx - mn);
+            h /= 6.0; if (h < 0.0) h += 1.0;
+          }
+          h = fract(h + uHueShift);
+          col = hsv2rgb(vec3(h, s, v));
+        }
+      }
+      return col;
+    }
+
+    void main() {
+      float t = uTime * uSpeed;
+      vec3 col;
+      if (uPanelSmooth == 1) {
+        // 4-tap sub-pixel AA: sample the panel at ±0.25 screen-pixel offsets
+        // and average. Kills cell-boundary aliasing / moiré / scan-line effects
+        // when the panel is viewed at a distance or at a steep angle.
+        vec2 dx = dFdx(vUv) * 0.25;
+        vec2 dy = dFdy(vUv) * 0.25;
+        col = 0.25 * (
+          computeLedColor(vUv - dx - dy, t) +
+          computeLedColor(vUv + dx - dy, t) +
+          computeLedColor(vUv - dx + dy, t) +
+          computeLedColor(vUv + dx + dy, t)
+        );
+      } else {
+        col = computeLedColor(vUv, t);
+      }
+      col *= uBrightness;
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+};
+
+const ledGeo = new THREE.PlaneGeometry(800, 800, 1, 1);
+const ledMat = new THREE.ShaderMaterial({ ...ledShader, depthWrite: true, side: THREE.FrontSide });
+const ledPanel = new THREE.Mesh(ledGeo, ledMat);
+ledPanel.position.z = -30;
+scene.add(ledPanel);
+
+const ledMatB = new THREE.ShaderMaterial({ ...ledShader, depthWrite: true, side: THREE.FrontSide });
+const ledPanelB = new THREE.Mesh(new THREE.PlaneGeometry(800, 800, 1, 1), ledMatB);
+ledPanelB.position.z = -30;
+ledPanelB.visible = false;
+scene.add(ledPanelB);
+
+const backdrop = new THREE.Mesh(
+  new THREE.PlaneGeometry(6000, 6000),
+  new THREE.MeshBasicMaterial({ color: 0x000000 })
+);
+backdrop.position.z = -800;
+scene.add(backdrop);
+
+// -------------------------------------------------------------------------
+// PRNG
+// -------------------------------------------------------------------------
+function mulberry32(seed) {
+  return function() {
+    let t = seed += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// -------------------------------------------------------------------------
+// Logo mask — loaded from an uploaded image/SVG, sampled by the logo lens
+// -------------------------------------------------------------------------
+let logoImageData = null;
+let logoName = '';
+
+function rasteriseLogo(img, size = 1024) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  // keep transparent background; alpha channel distinguishes logo from background
+  const aspect = img.width / img.height;
+  let w, h;
+  if (aspect >= 1) { w = size * 0.9; h = w / aspect; }
+  else            { h = size * 0.9; w = h * aspect; }
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+  return ctx.getImageData(0, 0, size, size);
+}
+
+function loadLogoFile(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    logoImageData = rasteriseLogo(img);
+    logoName = file.name;
+    URL.revokeObjectURL(url);
+    if (state.lensType === 'logo' || state.lensTypeB === 'logo') rebuildLenses();
+    setStatus(`logo loaded: ${file.name}`);
+  };
+  img.onerror = () => { setStatus(`logo load failed: ${file.name}`); URL.revokeObjectURL(url); };
+  img.src = url;
+}
+
+function loadLogoUrl(url, name, onReady) {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    logoImageData = rasteriseLogo(img);
+    logoName = name || url;
+    if (state.lensType === 'logo' || state.lensTypeB === 'logo') rebuildLenses();
+    setStatus(`logo loaded: ${logoName}`);
+    if (onReady) onReady();
+  };
+  img.onerror = () => setStatus(`logo load failed: ${name || url}`);
+  img.src = url;
+}
+
+// -------------------------------------------------------------------------
+// Lens types
+// -------------------------------------------------------------------------
+const LENS_TYPES = {
+  ripple_field: {
+    label: 'Ripple Field',
+    params: {
+      wavelength: { value: 70, min: 20, max: 200, step: 1 },
+      amplitude:  { value: 8,  min: 0,  max: 100,  step: 0.5 },
+    },
+    fn: (p) => (x, y) => {
+      const r = Math.hypot(x, y);
+      return p.amplitude * 0.5 * (1 + Math.sin(2 * Math.PI * r / p.wavelength));
+    },
+  },
+  torus_field: {
+    label: 'Torus Field',
+    params: {
+      cols:          { value: 3,  min: 1, max: 8, step: 1 },
+      rows:          { value: 3,  min: 1, max: 8, step: 1 },
+      torus_outer_r: { value: 50, min: 10, max: 120, step: 1 },
+      torus_inner_r: { value: 18, min: 1,  max: 80,  step: 1 },
+      torus_height:  { value: 14, min: 1,  max: 40,  step: 0.5 },
+    },
+    fn: (p, W, H) => {
+      const cx = [], cy = [];
+      for (let i = 0; i < p.cols; i++) cx.push(-W/2 + (i + 1) * W/(p.cols + 1));
+      for (let j = 0; j < p.rows; j++) cy.push(-H/2 + (j + 1) * H/(p.rows + 1));
+      const midR = (p.torus_outer_r + p.torus_inner_r) / 2;
+      const wallR = Math.max(0.1, (p.torus_outer_r - p.torus_inner_r) / 2);
+      return (x, y) => {
+        let z = 0;
+        for (const a of cx) for (const b of cy) {
+          const r = Math.hypot(x - a, y - b);
+          const diff = r - midR;
+          const inside = wallR * wallR - diff * diff;
+          if (inside > 0) {
+            const h = p.torus_height * Math.sqrt(inside) / wallR;
+            if (h > z) z = h;
+          }
+        }
+        return z;
+      };
+    },
+  },
+  hex_cells: {
+    label: 'Hex Cells',
+    params: {
+      cell_size:  { value: 40, min: 10, max: 120, step: 1 },
+      cell_depth: { value: 6,  min: 0,  max: 30,  step: 0.5 },
+      invert:     { value: false },
+    },
+    fn: (p, W, H) => {
+      const dx = p.cell_size * 1.5;
+      const dy = p.cell_size * Math.sqrt(3);
+      const radius = p.cell_size * 0.85;
+      const ncols = Math.ceil(W / dx) + 2;
+      const nrows = Math.ceil(H / dy) + 2;
+      const centres = [];
+      for (let row = -nrows; row <= nrows; row++) {
+        for (let col = -ncols; col <= ncols; col++) {
+          const ax = col * dx;
+          const ay = row * dy + (col % 2 ? dy / 2 : 0);
+          centres.push([ax, ay]);
+        }
+      }
+      return (x, y) => {
+        let z = p.cell_depth;
+        for (const [a, b] of centres) {
+          const r = Math.hypot(x - a, y - b);
+          if (r < radius) {
+            const bowl = 0.5 * (1 - Math.cos(Math.PI * r / radius)) * p.cell_depth;
+            if (bowl < z) z = bowl;
+          }
+        }
+        return p.invert ? (p.cell_depth - z) : z;
+      };
+    },
+  },
+  organic_bulbs: {
+    label: 'Organic Bulbs',
+    params: {
+      n_bulbs: { value: 24, min: 1,  max: 80, step: 1 },
+      seed:    { value: 7,  min: 0,  max: 999, step: 1 },
+      min_r:   { value: 30, min: 10, max: 120, step: 1 },
+      max_r:   { value: 75, min: 20, max: 200, step: 1 },
+      min_h:   { value: 8,  min: 0,  max: 30,  step: 0.5 },
+      max_h:   { value: 22, min: 1,  max: 50,  step: 0.5 },
+    },
+    fn: (p, W, H) => {
+      const rng = mulberry32(p.seed);
+      const margin = Math.max(p.min_r, p.max_r);
+      const bulbs = [];
+      for (let i = 0; i < p.n_bulbs; i++) {
+        const cx = rng() * (W - 2 * margin) - (W/2 - margin);
+        const cy = rng() * (H - 2 * margin) - (H/2 - margin);
+        const radius = p.min_r + rng() * Math.max(0, p.max_r - p.min_r);
+        const hpk = p.min_h + rng() * Math.max(0, p.max_h - p.min_h);
+        bulbs.push([cx, cy, radius, hpk]);
+      }
+      return (x, y) => {
+        let z = 0;
+        for (const [cx, cy, radius, hpk] of bulbs) {
+          const r = Math.hypot(x - cx, y - cy);
+          if (r < radius) {
+            const h = hpk * 0.5 * (1 + Math.cos(Math.PI * r / radius));
+            if (h > z) z = h;
+          }
+        }
+        return z;
+      };
+    },
+  },
+  pyramid_grid: {
+    label: 'Pyramid Grid (v1 homage)',
+    params: {
+      cols:      { value: 8,  min: 1,  max: 24, step: 1 },
+      rows:      { value: 8,  min: 1,  max: 24, step: 1 },
+      pyramid_h: { value: 20, min: 1,  max: 60, step: 0.5 },
+    },
+    fn: (p, W, H) => {
+      const cellW = W / p.cols;
+      const cellH = H / p.rows;
+      return (x, y) => {
+        const u = (((x + W/2) % cellW) + cellW) % cellW / cellW - 0.5;
+        const v = (((y + H/2) % cellH) + cellH) % cellH / cellH - 0.5;
+        const d = Math.max(Math.abs(u), Math.abs(v)) * 2;
+        return Math.max(0, Math.min(p.pyramid_h, p.pyramid_h * (1 - d)));
+      };
+    },
+  },
+  dome: {
+    label: 'Single Dome',
+    params: {
+      radius: { value: 280, min: 50, max: 600, step: 1 },
+      height: { value: 40,  min: 1,  max: 120, step: 1 },
+    },
+    fn: (p) => (x, y) => {
+      const r = Math.hypot(x, y);
+      if (r >= p.radius) return 0;
+      return p.height * 0.5 * (1 + Math.cos(Math.PI * r / p.radius));
+    },
+  },
+  morph_rings: {
+    label: 'Morph Rings (square ↔ circle)',
+    params: {
+      wavelength:   { value: 40, min: 10,  max: 200, step: 1 },
+      amplitude:    { value: 12, min: 0,   max: 60,  step: 0.5 },
+      morph_period: { value: 2,  min: 1,   max: 8,   step: 1 },
+      bias:         { value: 0.5, min: 0,  max: 1,   step: 0.02 },
+      phase_shift:  { value: 0,  min: 0,   max: 1,   step: 0.01 },
+    },
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const maxD = Math.min(W, H) * 0.5;
+      const period = Math.max(1, p.morph_period);
+      return (x, y) => {
+        const ax = Math.abs(x), ay = Math.abs(y);
+        const dSq = Math.max(ax, ay);       // Chebyshev — square
+        const dCr = Math.hypot(x, y);        // Euclidean — circle
+        const dMid = 0.5 * (dSq + dCr);
+        // Morph oscillator: 0 → 1 → 0 once per cycle. Starts at 0 (square) near centre.
+        const cycleLen = p.wavelength * period;
+        const osc = 0.5 - 0.5 * Math.cos(TAU * dMid / cycleLen);
+        // Bias slides the midpoint toward more-square (0) or more-circle (1).
+        // bias=0.5 keeps the pure oscillation; higher = circlier; lower = squarer.
+        const w = Math.min(1, Math.max(0, osc + (p.bias - 0.5)));
+        const d = dSq * (1 - w) + dCr * w;
+        if (d >= maxD) return 0;
+        // Soft radial fall-off so edges taper gracefully
+        const fade = 0.5 * (1 + Math.cos(Math.PI * d / maxD));
+        // Concentric ridges along the morphed distance
+        const ridge = 0.5 * (1 + Math.sin(TAU * (d / p.wavelength + p.phase_shift)));
+        return p.amplitude * ridge * fade;
+      };
+    },
+  },
+  interlocking_teardrops: {
+    label: 'Interlocking Teardrops',
+    params: {
+      cols:         { value: 4,  min: 1,  max: 10,  step: 1 },
+      rows:         { value: 4,  min: 1,  max: 10,  step: 1 },
+      size:         { value: 70, min: 20, max: 200, step: 1 },
+      height:       { value: 16, min: 1,  max: 40,  step: 0.5 },
+      asymmetry:    { value: 0.5, min: 0.0, max: 0.9, step: 0.05 },
+      rot_variance: { value: 0.8, min: 0,   max: 1,   step: 0.05 },
+      jitter:       { value: 0.3, min: 0,   max: 0.6, step: 0.05 },
+      seed:         { value: 3,  min: 0,   max: 999, step: 1 },
+    },
+    fn: (p, W, H) => {
+      const rng = mulberry32(p.seed);
+      const dxC = W / p.cols;
+      const dyC = H / p.rows;
+      const drops = [];
+      for (let i = 0; i < p.cols; i++) {
+        for (let j = 0; j < p.rows; j++) {
+          const cx = -W/2 + (i + 0.5) * dxC + (rng() - 0.5) * dxC * p.jitter;
+          const cy = -H/2 + (j + 0.5) * dyC + (rng() - 0.5) * dyC * p.jitter;
+          const angle = rng() * Math.PI * 2 * p.rot_variance;
+          drops.push([cx, cy, Math.cos(angle), Math.sin(angle)]);
+        }
+      }
+      return (x, y) => {
+        let z = 0;
+        for (const [cx, cy, ca, sa] of drops) {
+          const ex = x - cx, ey = y - cy;
+          const lx = ex * ca + ey * sa;
+          const ly = -ex * sa + ey * ca;
+          const r = Math.hypot(lx, ly);
+          if (r > p.size) continue;
+          const theta = Math.atan2(ly, lx);
+          const rMax = p.size * (1 + p.asymmetry * Math.cos(theta));
+          if (r >= rMax) continue;
+          const t = r / rMax;
+          const v = p.height * 0.5 * (1 + Math.cos(Math.PI * t));
+          if (v > z) z = v;
+        }
+        return z;
+      };
+    },
+  },
+  wave_lattice: {
+    label: 'Wave Lattice',
+    params: {
+      wavelength_x: { value: 80, min: 20, max: 300, step: 1 },
+      wavelength_y: { value: 80, min: 20, max: 300, step: 1 },
+      amplitude:    { value: 10, min: 0,  max: 100,  step: 0.5 },
+      diagonal_mix: { value: 0.0, min: 0, max: 1,   step: 0.05 },
+      rotation:     { value: 0,  min: 0,  max: 90,  step: 1 },
+    },
+    fn: (p) => {
+      const rad = p.rotation * Math.PI / 180;
+      const ca = Math.cos(rad), sa = Math.sin(rad);
+      const avg = (p.wavelength_x + p.wavelength_y) / 2;
+      return (x, y) => {
+        const rx = x * ca + y * sa;
+        const ry = -x * sa + y * ca;
+        const wx = Math.sin(2 * Math.PI * rx / p.wavelength_x);
+        const wy = Math.sin(2 * Math.PI * ry / p.wavelength_y);
+        const d1 = Math.sin(2 * Math.PI * (rx + ry) / avg);
+        const d2 = Math.sin(2 * Math.PI * (rx - ry) / avg);
+        const val = (wx + wy) * (1 - p.diagonal_mix) + (d1 + d2) * p.diagonal_mix;
+        return p.amplitude * 0.25 * (2 + val);
+      };
+    },
+  },
+  logo: {
+    label: 'Custom Logo',
+    params: {
+      height:  { value: 30, min: 1,  max: 80,  step: 0.5 },
+      falloff: { value: 0.15, min: 0, max: 0.5, step: 0.01 },
+      invert:  { value: false },
+      threshold: { value: 0.5, min: 0.0, max: 1.0, step: 0.01 },
+    },
+    fn: (p, W, H) => {
+      const data = logoImageData;
+      if (!data) return () => 0;
+      const dw = data.width, dh = data.height;
+      const buf = data.data;
+      return (x, y) => {
+        const u = (x + W / 2) / W;
+        const v = 1 - (y + H / 2) / H;
+        if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
+        const px = Math.min(dw - 1, Math.max(0, Math.floor(u * dw)));
+        const py = Math.min(dh - 1, Math.max(0, Math.floor(v * dh)));
+        const idx = (py * dw + px) * 4;
+        const alpha = buf[idx + 3] / 255;
+        const lum   = (buf[idx] + buf[idx + 1] + buf[idx + 2]) / (3 * 255);
+        // mask = "is this a logo pixel?" — handles transparent-bg SVGs and opaque light-bg PNGs
+        const raw = p.invert ? lum : (1 - lum);
+        let t = alpha * raw + (1 - alpha) * (p.invert ? 1 : 0);
+        const soft = Math.max(0.001, p.falloff);
+        t = Math.min(1, Math.max(0, (t - p.threshold + soft) / (2 * soft)));
+        const shaped = 0.5 * (1 - Math.cos(Math.PI * t));
+        return shaped * p.height;
+      };
+    },
+  },
+  voronoi_bulbs: {
+    label: 'Voronoi Bulbs',
+    params: {
+      n_seeds: { value: 20, min: 3, max: 80,  step: 1 },
+      seed:    { value: 5,  min: 0, max: 999, step: 1 },
+      height:  { value: 18, min: 1, max: 50,  step: 0.5 },
+      fill:    { value: 0.85, min: 0.2, max: 1.0, step: 0.02 },
+    },
+    fn: (p, W, H) => {
+      const rng = mulberry32(p.seed);
+      const margin = 20;
+      const seeds = [];
+      for (let i = 0; i < p.n_seeds; i++) {
+        seeds.push([
+          rng() * (W - 2 * margin) - (W/2 - margin),
+          rng() * (H - 2 * margin) - (H/2 - margin),
+        ]);
+      }
+      return (x, y) => {
+        let d1 = Infinity, d2 = Infinity;
+        for (const [sx, sy] of seeds) {
+          const d = Math.hypot(x - sx, y - sy);
+          if (d < d1) { d2 = d1; d1 = d; }
+          else if (d < d2) { d2 = d; }
+        }
+        const rCell = (d1 + d2) * 0.5 * p.fill;
+        if (d1 > rCell) return 0;
+        const t = d1 / rCell;
+        return p.height * 0.5 * (1 + Math.cos(Math.PI * t));
+      };
+    },
+  },
+};
+
+// -------------------------------------------------------------------------
+// Geometry
+// -------------------------------------------------------------------------
+function makeLensGeometry(heightFn, width, height, resolution, thickness, smoothing = 0) {
+  const nx = Math.max(4, Math.floor(width / resolution) + 1);
+  const ny = Math.max(4, Math.floor(height / resolution) + 1);
+
+  // Pre-sample the height field into a grid so we can blur it before emitting vertices.
+  const grid = new Float32Array(nx * ny);
+  for (let i = 0; i < ny; i++) {
+    const y = -height/2 + (i / (ny - 1)) * height;
+    for (let j = 0; j < nx; j++) {
+      const x = -width/2 + (j / (nx - 1)) * width;
+      grid[i * nx + j] = heightFn(x, y);
+    }
+  }
+  // Separable box-blur passes for cheap surface smoothing. Each pass is ~O(nx·ny).
+  const passes = Math.max(0, smoothing | 0);
+  if (passes > 0) {
+    const tmp = new Float32Array(nx * ny);
+    for (let p = 0; p < passes; p++) {
+      // Horizontal
+      for (let i = 0; i < ny; i++) {
+        const row = i * nx;
+        for (let j = 0; j < nx; j++) {
+          const l = j > 0 ? grid[row + j - 1] : grid[row + j];
+          const c = grid[row + j];
+          const r = j < nx - 1 ? grid[row + j + 1] : grid[row + j];
+          tmp[row + j] = (l + c + c + r) * 0.25;
+        }
+      }
+      // Vertical
+      for (let j = 0; j < nx; j++) {
+        for (let i = 0; i < ny; i++) {
+          const u = i > 0 ? tmp[(i - 1) * nx + j] : tmp[i * nx + j];
+          const c = tmp[i * nx + j];
+          const d = i < ny - 1 ? tmp[(i + 1) * nx + j] : tmp[i * nx + j];
+          grid[i * nx + j] = (u + c + c + d) * 0.25;
+        }
+      }
+    }
+  }
+
+  const verts = [];
+  const indices = [];
+  const vert = (x, y, z) => { const id = verts.length / 3; verts.push(x, y, z); return id; };
+
+  const topIds = [], botIds = [];
+  for (let i = 0; i < ny; i++) {
+    const y = -height/2 + (i / (ny - 1)) * height;
+    const rowT = [], rowB = [];
+    for (let j = 0; j < nx; j++) {
+      const x = -width/2 + (j / (nx - 1)) * width;
+      rowT.push(vert(x, y, grid[i * nx + j]));
+    }
+    for (let j = 0; j < nx; j++) {
+      const x = -width/2 + (j / (nx - 1)) * width;
+      rowB.push(vert(x, y, -thickness));
+    }
+    topIds.push(rowT); botIds.push(rowB);
+  }
+
+  // Sculpted top face
+  for (let i = 0; i < ny - 1; i++) for (let j = 0; j < nx - 1; j++) {
+    const a = topIds[i][j], b = topIds[i][j+1], c = topIds[i+1][j+1], d = topIds[i+1][j];
+    indices.push(a, b, c, a, c, d);
+  }
+  // Flat bottom face (reverse winding)
+  for (let i = 0; i < ny - 1; i++) for (let j = 0; j < nx - 1; j++) {
+    const a = botIds[i][j], b = botIds[i][j+1], c = botIds[i+1][j+1], d = botIds[i+1][j];
+    indices.push(a, c, b, a, d, c);
+  }
+  // Perimeter walls
+  for (let j = 0; j < nx - 1; j++) {
+    const t1 = topIds[0][j], t2 = topIds[0][j+1], b1 = botIds[0][j], b2 = botIds[0][j+1];
+    indices.push(t1, b1, b2, t1, b2, t2);
+    const ut1 = topIds[ny-1][j], ut2 = topIds[ny-1][j+1], ub1 = botIds[ny-1][j], ub2 = botIds[ny-1][j+1];
+    indices.push(ut1, ub2, ub1, ut1, ut2, ub2);
+  }
+  for (let i = 0; i < ny - 1; i++) {
+    const t1 = topIds[i][0], t2 = topIds[i+1][0], b1 = botIds[i][0], b2 = botIds[i+1][0];
+    indices.push(t1, b2, b1, t1, t2, b2);
+    const rt1 = topIds[i][nx-1], rt2 = topIds[i+1][nx-1], rb1 = botIds[i][nx-1], rb2 = botIds[i+1][nx-1];
+    indices.push(rt1, rb1, rb2, rt1, rb2, rt2);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// -------------------------------------------------------------------------
+// Materials
+// -------------------------------------------------------------------------
+function makeLensMaterial() {
+  return new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    metalness: 0.0,
+    roughness: 0.02,
+    transmission: 1.0,
+    thickness: 30,
+    ior: 1.49,
+    dispersion: 0.0,
+    attenuationColor: 0xffffff,
+    attenuationDistance: 2000,
+    clearcoat: 0.0,
+    specularIntensity: 1.0,
+    side: THREE.DoubleSide,
+  });
+}
+const lensMaterial  = makeLensMaterial();
+const lensMaterialB = makeLensMaterial();
+
+let lensMesh = null, lensMeshB = null;
+
+// -------------------------------------------------------------------------
+// State
+// -------------------------------------------------------------------------
+const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
+  lensType: 'ripple_field',
+  panelWidth: 600,
+  panelHeight: 600,
+  resolution: 1.0,
+  smoothing: 1,
+  params: {},
+  ior: 1.49,
+  dispersion: 0.0,
+  thickness: 30,
+  roughness: 0.02,
+  tint: '#ffffff',
+  panelMode: 1,
+  panelScale: 40,
+  panelSpeed: 0.5,
+  panelBrightness: 2.4,
+  panelHue: 0.0,
+  panelDistance: 30,
+  sqThickness: 0.5,
+  sqSoftness: 0.3,
+  sqMono: false,
+  sqReverse: false,
+  sqHueSpread: 2.5,
+  sqGradient: false,
+  sqGradA: '#ff2e88',
+  sqGradB: '#00e0ff',
+  sqGradC: '#ffd34d',
+  sqGradAxis: 0,
+  sqGradScale: 1.0,
+  sqGradFlow: 0.15,
+  panelSmooth: true,
+  renderQuality: 'high',
+  recAspect: 'native',
+  recResolution: '1080p (Full HD)',
+  recFps: 30,
+  recDuration: 10,
+  recLoop: false,
+  renderSmooth: '2× (clean)',
+  maxQualityExport: true,
+  watermarkText: '',
+  autoOrbit: false,
+  orbitSpeed: 0.035,
+  orbitArc: 45,
+  autoZoom: false,
+  zoomAmount: 0.25,
+  zoomSpeed: 0.08,
+  autoPan: false,
+  panAmount: 0.25,
+  panSpeed: 0.05,
+  lensSpin: 0,
+  bgColor: '#050505',
+  bloomEnabled: false,
+  bloomStrength: 0.5,
+  bloomRadius: 0.7,
+  bloomThreshold: 0.82,
+  compare: false,
+  lensTypeB: 'organic_bulbs',
+  paramsB: {},
+  iorB: 1.49,
+  dispersionB: 0.0,
+  thicknessB: 30,
+  roughnessB: 0.02,
+  tintB: '#ffffff',
+}));
+
+const state = defaultStateSnapshot();
+state.currentPreset = '—';
+state.reset       = () => { resetAll(); };
+state.exportSTL   = () => { doExportSTL(false); };
+state.exportSTLB  = () => { doExportSTL(true); };
+state.screenshot  = () => { doScreenshot(); };
+state.loadImage   = () => { document.getElementById('fileImage').click(); };
+state.loadVideo   = () => { document.getElementById('fileVideo').click(); };
+state.clearMedia  = () => { clearMedia(); };
+state.savePreset  = () => { savePresetPrompt(); };
+state.loadLogo    = () => { document.getElementById('fileLogo').click(); };
+state.deletePreset = () => { deleteCurrentPreset(); };
+state.exportPresets = () => { exportAllPresets(); };
+state.importPresets = () => { document.getElementById('fileImport').click(); };
+state.toggleRecord = () => { toggleRecording(); };
+state.offlineRender = () => { renderOffline(); };
+state.saveAsDefaults = () => { saveAsDefaults(); };
+state.clearDefaults  = () => { clearDefaults(); };
+state.snapToLoop     = () => { snapSpeedsToLoop(); };
+state.togglePause    = () => { setAnimPaused(!animPaused); };
+state.abortOfflineRender = () => { abortOfflineRender(); };
+state.toggleEcoMode  = () => { toggleEcoMode(); };
+// --- Shot sequence action stubs (populated after the functions are declared) ---
+state.seqAddShot     = () => {};
+state.seqPreview     = () => {};
+state.seqStopPreview = () => {};
+state.seqExport      = () => {};
+state.seqClearAll    = () => {};
+state.seqEasing      = 'ease-in-out';
+state.seqDefaultTransition = 3.0;
+state.seqDefaultHold = 0.5;
+
+function loadLensParams(which) {
+  if (which === 'A') {
+    state.params = {};
+    const defs = LENS_TYPES[state.lensType].params;
+    for (const k in defs) state.params[k] = defs[k].value;
+  } else {
+    state.paramsB = {};
+    const defs = LENS_TYPES[state.lensTypeB].params;
+    for (const k in defs) state.paramsB[k] = defs[k].value;
+  }
+}
+loadLensParams('A');
+loadLensParams('B');
+
+// -------------------------------------------------------------------------
+// Rebuild
+// -------------------------------------------------------------------------
+let rebuildTimer = null;
+function rebuildSoon() {
+  if (rebuildTimer) cancelAnimationFrame(rebuildTimer);
+  rebuildTimer = requestAnimationFrame(() => {
+    rebuildTimer = null;
+    rebuildLenses();
+  });
+}
+function rebuildLenses() {
+  if (lensMesh) { lensMesh.geometry.dispose(); scene.remove(lensMesh); }
+  const typeA = LENS_TYPES[state.lensType];
+  const hA = typeA.fn(state.params, state.panelWidth, state.panelHeight);
+  const geoA = makeLensGeometry(hA, state.panelWidth, state.panelHeight, state.resolution, state.thickness, state.smoothing);
+  lensMesh = new THREE.Mesh(geoA, lensMaterial);
+  scene.add(lensMesh);
+
+  // LED sits behind the flat back of the lens: lens back is at z = -thickness,
+  // so LED is at z = -(thickness + gap)
+  const ledZA = -(state.thickness + state.panelDistance);
+  const ledZB = -(state.thicknessB + state.panelDistance);
+
+  if (state.compare) {
+    const offsetX = state.panelWidth / 2 + 40;
+    lensMesh.position.set(-offsetX, 0, 0);
+    ledPanel.position.set(-offsetX, 0, ledZA);
+    ledPanel.geometry.dispose();
+    ledPanel.geometry = new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+
+    if (lensMeshB) { lensMeshB.geometry.dispose(); scene.remove(lensMeshB); }
+    const typeB = LENS_TYPES[state.lensTypeB];
+    const hB = typeB.fn(state.paramsB, state.panelWidth, state.panelHeight);
+    const geoB = makeLensGeometry(hB, state.panelWidth, state.panelHeight, state.resolution, state.thicknessB, state.smoothing);
+    lensMeshB = new THREE.Mesh(geoB, lensMaterialB);
+    lensMeshB.position.set(offsetX, 0, 0);
+    scene.add(lensMeshB);
+
+    ledPanelB.visible = true;
+    ledPanelB.position.set(offsetX, 0, ledZB);
+    ledPanelB.geometry.dispose();
+    ledPanelB.geometry = new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+
+    setStatus(`A: ${typeA.label}  ·  B: ${typeB.label}  ·  ${state.panelWidth}×${state.panelHeight} mm each`);
+  } else {
+    lensMesh.position.set(0, 0, 0);
+    ledPanel.position.set(0, 0, ledZA);
+    ledPanel.geometry.dispose();
+    ledPanel.geometry = new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+    if (lensMeshB) { scene.remove(lensMeshB); lensMeshB.geometry.dispose(); lensMeshB = null; }
+    ledPanelB.visible = false;
+    setStatus(`${typeA.label}  ·  ${state.panelWidth}×${state.panelHeight} mm  ·  ${(geoA.attributes.position.count).toLocaleString()} verts`);
+  }
+}
+
+// -------------------------------------------------------------------------
+// Media
+// -------------------------------------------------------------------------
+let currentVideoEl = null;
+function setPanelTexture(tex) {
+  if (panelTexture.value && panelTexture.value !== tex) panelTexture.value.dispose?.();
+  panelTexture.value = tex;
+  hasTexture.value = tex ? 1 : 0;
+}
+function clearMedia() {
+  if (currentVideoEl) { currentVideoEl.pause(); currentVideoEl = null; }
+  setPanelTexture(null);
+  if (state.panelMode === 7 || state.panelMode === 8) {
+    state.panelMode = 1;
+    ledMat.uniforms.uMode.value = 1;
+    ledMatB.uniforms.uMode.value = 1;
+    guiRefresh();
+  }
+  setStatus('media cleared');
+}
+document.getElementById('fileImage').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  new THREE.TextureLoader().load(url, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    setPanelTexture(tex);
+    if (currentVideoEl) { currentVideoEl.pause(); currentVideoEl = null; }
+    state.panelMode = 7;
+    ledMat.uniforms.uMode.value = 7;
+    ledMatB.uniforms.uMode.value = 7;
+    guiRefresh();
+    setStatus(`image loaded: ${file.name}`);
+  });
+});
+document.getElementById('fileVideo').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const v = document.createElement('video');
+  v.src = url; v.loop = true; v.muted = true; v.playsInline = true; v.crossOrigin = 'anonymous';
+  v.play().catch(() => {});
+  currentVideoEl = v;
+  const tex = new THREE.VideoTexture(v);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  setPanelTexture(tex);
+  state.panelMode = 8;
+  ledMat.uniforms.uMode.value = 8;
+  ledMatB.uniforms.uMode.value = 8;
+  guiRefresh();
+  setStatus(`video loaded: ${file.name}`);
+});
+
+// -------------------------------------------------------------------------
+// Curated optical bundles — lens + animation tuned to resonate
+// -------------------------------------------------------------------------
+const BUNDLES = {
+  cathedral_glass: {
+    label: 'Cathedral Glass',
+    note: 'Convex hex micro-lenses each magnify a cluster of stars into a jewel',
+    state: {
+      lensType: 'hex_cells',
+      params: { cell_size: 45, cell_depth: 28, invert: true },
+      panelWidth: 600, panelHeight: 600, resolution: 2.5,
+      ior: 1.49, dispersion: 3.0, thickness: 40, roughness: 0.0, tint: '#ffffff',
+      panelMode: 9, panelScale: 32, panelSpeed: 0.25, panelBrightness: 3.8, panelHue: 0.08, panelDistance: 70,
+      compare: false,
+    },
+  },
+  black_hole: {
+    label: 'Black Hole',
+    note: 'Tall dome drags a spiral galaxy into a rainbow gravitational singularity',
+    state: {
+      lensType: 'dome',
+      params: { radius: 220, height: 95 },
+      panelWidth: 600, panelHeight: 600, resolution: 2.5,
+      ior: 1.49, dispersion: 8.0, thickness: 45, roughness: 0.0, tint: '#ffffff',
+      panelMode: 10, panelScale: 40, panelSpeed: 0.3, panelBrightness: 3.8, panelHue: 0.0, panelDistance: 70,
+      compare: false,
+    },
+  },
+  moire_petals: {
+    label: 'Moiré Petals',
+    note: 'Ripple lens detuned against fine rings — a slow-rotating flower interference',
+    state: {
+      lensType: 'ripple_field',
+      params: { wavelength: 42, amplitude: 24 },
+      panelWidth: 600, panelHeight: 600, resolution: 2.0,
+      ior: 1.49, dispersion: 1.5, thickness: 30, roughness: 0.01, tint: '#ffffff',
+      panelMode: 11, panelScale: 160, panelSpeed: 0.12, panelBrightness: 3.0, panelHue: 0.72, panelDistance: 35,
+      compare: false,
+    },
+  },
+  starfield_torus: {
+    label: 'Starfield Torus',
+    note: 'Torus ring-lenses magnify twinkling stars into drifting halos of suns',
+    state: {
+      lensType: 'torus_field',
+      params: { cols: 4, rows: 4, torus_outer_r: 55, torus_inner_r: 18, torus_height: 30 },
+      panelWidth: 600, panelHeight: 600, resolution: 2.5,
+      ior: 1.49, dispersion: 4.0, thickness: 40, roughness: 0.0, tint: '#ffffff',
+      panelMode: 9, panelScale: 24, panelSpeed: 0.35, panelBrightness: 4.5, panelHue: 0.0, panelDistance: 55,
+      compare: false,
+    },
+  },
+  prismatic_shatter: {
+    label: 'Prismatic Shatter',
+    note: 'Voronoi bulbs fracture a checker into rainbow stained-glass',
+    state: {
+      lensType: 'voronoi_bulbs',
+      params: { n_seeds: 18, seed: 7, height: 38, fill: 0.95 },
+      panelWidth: 600, panelHeight: 600, resolution: 2.0,
+      ior: 1.49, dispersion: 6.0, thickness: 45, roughness: 0.0, tint: '#ffffff',
+      panelMode: 0, panelScale: 36, panelSpeed: 0.3, panelBrightness: 3.2, panelHue: 0.0, panelDistance: 60,
+      compare: false,
+    },
+  },
+  liquid_mercury: {
+    label: 'Liquid Mercury',
+    note: 'Wave lattice ripples fine rings into rolling chrome — cool and alive',
+    state: {
+      lensType: 'wave_lattice',
+      params: { wavelength_x: 75, wavelength_y: 75, amplitude: 40, diagonal_mix: 0.45, rotation: 15 },
+      panelWidth: 600, panelHeight: 600, resolution: 2.0,
+      ior: 1.49, dispersion: 2.5, thickness: 45, roughness: 0.0, tint: '#dbe8ff',
+      panelMode: 11, panelScale: 90, panelSpeed: 0.22, panelBrightness: 3.2, panelHue: 0.58, panelDistance: 60,
+      compare: false,
+    },
+  },
+  solar_corona: {
+    label: 'Solar Corona',
+    note: 'Dome magnifies a 12-ray pulsing star into a breathing rainbow sun',
+    state: {
+      lensType: 'dome',
+      params: { radius: 300, height: 70 },
+      panelWidth: 600, panelHeight: 600, resolution: 2.5,
+      ior: 1.49, dispersion: 5.0, thickness: 40, roughness: 0.0, tint: '#fff4e0',
+      panelMode: 12, panelScale: 40, panelSpeed: 0.25, panelBrightness: 4.2, panelHue: 0.08, panelDistance: 50,
+      compare: false,
+    },
+  },
+  comet_streaks: {
+    label: 'Comet Streaks',
+    note: 'Asymmetric teardrops drag a starfield into rainbow comet trails',
+    state: {
+      lensType: 'interlocking_teardrops',
+      params: { cols: 5, rows: 5, size: 75, height: 34, asymmetry: 0.8, rot_variance: 0.6, jitter: 0.12, seed: 13 },
+      panelWidth: 600, panelHeight: 600, resolution: 2.0,
+      ior: 1.49, dispersion: 7.0, thickness: 40, roughness: 0.0, tint: '#ffffff',
+      panelMode: 9, panelScale: 32, panelSpeed: 0.5, panelBrightness: 4.0, panelHue: 0.12, panelDistance: 55,
+      compare: false,
+    },
+  },
+  gurner: {
+    label: 'Gurner — Wordmark',
+    note: 'Gurner logo extruded as lens geometry over rainbow rings',
+    logoUrl: 'assets/gurner-logo.svg',
+    state: {
+      lensType: 'logo',
+      params: { height: 30, falloff: 0.12, invert: false, threshold: 0.55 },
+      panelWidth: 900, panelHeight: 240, resolution: 1.5,
+      ior: 1.49, dispersion: 4.0, thickness: 25, roughness: 0.0, tint: '#ffffff',
+      panelMode: 11, panelScale: 100, panelSpeed: 0.2, panelBrightness: 3.0, panelHue: 0.08, panelDistance: 30,
+      compare: false,
+    },
+  },
+};
+
+function applyBundle(key) {
+  const b = BUNDLES[key];
+  if (!b) return;
+  const snap = defaultStateSnapshot();
+  Object.assign(snap, b.state);
+  const apply = () => {
+    applyPreset(snap);
+    state.currentPreset = b.label;
+    setStatus(`bundle · ${b.label} — ${b.note}`);
+    guiRefresh();
+  };
+  if (b.logoUrl) {
+    loadLogoUrl(b.logoUrl, b.label, apply);
+  } else {
+    apply();
+  }
+}
+
+// -------------------------------------------------------------------------
+// Presets
+// -------------------------------------------------------------------------
+const PRESET_KEY = 'prismatica.presets.v1';
+function loadPresets() {
+  try { return JSON.parse(localStorage.getItem(PRESET_KEY) || '{}'); }
+  catch { return {}; }
+}
+function savePresets(obj) { localStorage.setItem(PRESET_KEY, JSON.stringify(obj)); }
+function presetSnapshot() {
+  const s = {};
+  for (const k of [
+    'lensType','panelWidth','panelHeight','resolution','smoothing','params',
+    'ior','dispersion','thickness','roughness','tint',
+    'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelDistance',
+    'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
+    'sqGradient','sqGradA','sqGradB','sqGradC','sqGradAxis','sqGradScale','sqGradFlow',
+    'bgColor','bloomEnabled','bloomStrength','bloomRadius','bloomThreshold','lensSpin',
+    'compare','lensTypeB','paramsB','iorB','dispersionB','thicknessB','roughnessB','tintB',
+  ]) s[k] = JSON.parse(JSON.stringify(state[k]));
+  return s;
+}
+function applyPreset(p) {
+  for (const k in p) state[k] = JSON.parse(JSON.stringify(p[k]));
+  // Migrate older presets that predate these fields to the current defaults.
+  if (!('smoothing' in p)) state.smoothing = 1;
+  if (!('resolution' in p) || state.resolution > 2.5) state.resolution = 1.0;
+  if (!('bgColor' in p)) state.bgColor = '#050505';
+  if (!('bloomEnabled' in p)) state.bloomEnabled = false;
+  syncMaterials();
+  syncShader();
+  syncScene();
+  syncBloom();
+  buildParamFolders();
+  rebuildLenses();
+  guiRefresh();
+}
+
+// -------------------------------------------------------------------------
+// User-saved defaults (persist to localStorage so the startup state matches
+// whatever Kit has dialled in right now).
+// -------------------------------------------------------------------------
+const DEFAULTS_KEY = 'prismatica.defaults.v1';
+function loadSavedDefaults() {
+  try { return JSON.parse(localStorage.getItem(DEFAULTS_KEY) || 'null'); }
+  catch { return null; }
+}
+function saveAsDefaults() {
+  const snap = presetSnapshot();
+  // Also capture Capture / scene fields that aren't in the standard preset snapshot.
+  for (const k of [
+    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','maxQualityExport','panelSmooth','watermarkText',
+    'autoOrbit','orbitSpeed','orbitArc',
+    'autoZoom','zoomAmount','zoomSpeed',
+    'autoPan','panAmount','panSpeed',
+    'lensSpin','bgColor',
+    'bloomEnabled','bloomStrength','bloomRadius','bloomThreshold',
+  ]) snap[k] = JSON.parse(JSON.stringify(state[k]));
+  try {
+    localStorage.setItem(DEFAULTS_KEY, JSON.stringify(snap));
+    setStatus('saved current settings as defaults');
+  } catch (e) { setStatus('save defaults failed: ' + e.message); }
+}
+function clearDefaults() {
+  localStorage.removeItem(DEFAULTS_KEY);
+  setStatus('defaults cleared (reload to see built-in defaults)');
+}
+
+// Snap orbit/zoom/pan/spin speeds so each completes an integer number of cycles
+// over the current clip duration. Use this BEFORE an offline render with loop on
+// so the motion closes seamlessly without shifting away from the user's intent.
+function snapSpeedsToLoop() {
+  const d = Math.max(1, state.recDuration | 0 || 10);
+  const snap = (speed) => {
+    if (!speed) return 0;
+    const cycles = Math.max(1, Math.round(speed * d));
+    return cycles / d;
+  };
+  const parts = [];
+  if (state.autoOrbit && state.orbitSpeed) { const v = snap(state.orbitSpeed); parts.push(`orbit ${state.orbitSpeed.toFixed(3)}→${v.toFixed(3)}`); state.orbitSpeed = v; }
+  if (state.autoZoom  && state.zoomSpeed)  { const v = snap(state.zoomSpeed);  parts.push(`zoom ${state.zoomSpeed.toFixed(3)}→${v.toFixed(3)}`);  state.zoomSpeed  = v; }
+  if (state.autoPan   && state.panSpeed)   { const v = snap(state.panSpeed);   parts.push(`pan ${state.panSpeed.toFixed(3)}→${v.toFixed(3)}`);   state.panSpeed   = v; }
+  if (state.lensSpin) {
+    const rots = Math.max(1, Math.round(Math.abs(state.lensSpin) * d / 360));
+    const sign = state.lensSpin < 0 ? -1 : 1;
+    const v = sign * rots * 360 / d;
+    parts.push(`spin ${state.lensSpin.toFixed(1)}→${v.toFixed(1)}°/s`);
+    state.lensSpin = v;
+  }
+  guiRefresh();
+  setStatus(parts.length ? `snapped for ${d}s loop: ${parts.join(' · ')}` : `nothing to snap — enable orbit/zoom/pan/spin first`);
+}
+function savePresetPrompt() {
+  const name = prompt('Preset name:');
+  if (!name) return;
+  const presets = loadPresets();
+  presets[name] = presetSnapshot();
+  savePresets(presets);
+  state.currentPreset = name;
+  refreshPresetDropdown();
+  guiRefresh();
+  setStatus(`saved preset "${name}"`);
+}
+function deleteCurrentPreset() {
+  const n = state.currentPreset;
+  if (!n || n === '—') return;
+  const presets = loadPresets();
+  delete presets[n];
+  savePresets(presets);
+  state.currentPreset = '—';
+  refreshPresetDropdown();
+  setStatus(`deleted preset "${n}"`);
+}
+function exportAllPresets() {
+  const blob = new Blob([JSON.stringify(loadPresets(), null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `prismatica_presets_${Date.now()}.json`;
+  a.click();
+  setStatus('presets exported');
+}
+document.getElementById('fileLogo').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  loadLogoFile(file);
+  state.lensType = 'logo';
+  buildParamFolders();
+  rebuildLenses();
+  guiRefresh();
+});
+document.getElementById('fileImport').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    const current = loadPresets();
+    Object.assign(current, data);
+    savePresets(current);
+    refreshPresetDropdown();
+    setStatus(`imported ${Object.keys(data).length} presets`);
+  } catch (err) { setStatus('import failed: ' + err.message); }
+});
+
+// -------------------------------------------------------------------------
+// Sync helpers
+// -------------------------------------------------------------------------
+function syncMaterials() {
+  lensMaterial.ior = state.ior;
+  lensMaterial.dispersion = state.dispersion;
+  lensMaterial.thickness = state.thickness;
+  lensMaterial.roughness = state.roughness;
+  lensMaterial.color.set(state.tint);
+  lensMaterial.attenuationColor.set(state.tint);
+  lensMaterialB.ior = state.iorB;
+  lensMaterialB.dispersion = state.dispersionB;
+  lensMaterialB.thickness = state.thicknessB;
+  lensMaterialB.roughness = state.roughnessB;
+  lensMaterialB.color.set(state.tintB);
+  lensMaterialB.attenuationColor.set(state.tintB);
+}
+function syncShader() {
+  for (const m of [ledMat, ledMatB]) {
+    m.uniforms.uMode.value        = state.panelMode;
+    m.uniforms.uScale.value       = state.panelScale;
+    m.uniforms.uSpeed.value       = state.panelSpeed;
+    m.uniforms.uBrightness.value  = state.panelBrightness;
+    m.uniforms.uHueShift.value    = state.panelHue;
+    m.uniforms.uSqThickness.value = state.sqThickness;
+    m.uniforms.uSqSoftness.value  = state.sqSoftness;
+    m.uniforms.uSqMono.value      = state.sqMono ? 1 : 0;
+    m.uniforms.uSqDir.value       = state.sqReverse ? -1.0 : 1.0;
+    m.uniforms.uSqHueSpread.value = state.sqHueSpread;
+    m.uniforms.uSqGrad.value      = state.sqGradient ? 1 : 0;
+    m.uniforms.uSqGradA.value.set(state.sqGradA);
+    m.uniforms.uSqGradB.value.set(state.sqGradB);
+    m.uniforms.uSqGradC.value.set(state.sqGradC);
+    m.uniforms.uSqGradAxis.value  = +state.sqGradAxis | 0;
+    m.uniforms.uSqGradScale.value = state.sqGradScale;
+    m.uniforms.uSqGradFlow.value  = state.sqGradFlow;
+    m.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
+  }
+  ledPanel.position.z  = -(state.thickness  + state.panelDistance);
+  ledPanelB.position.z = -(state.thicknessB + state.panelDistance);
+}
+function syncScene() {
+  scene.background = new THREE.Color(state.bgColor);
+  if (backdrop && backdrop.material) backdrop.material.color.set(state.bgColor);
+}
+function syncBloom() {
+  bloomPass.enabled   = !!state.bloomEnabled;
+  bloomPass.strength  = state.bloomStrength;
+  bloomPass.radius    = state.bloomRadius;
+  bloomPass.threshold = state.bloomThreshold;
+}
+function resetAll() {
+  const d = defaultStateSnapshot();
+  for (const k in d) state[k] = d[k];
+  loadLensParams('A'); loadLensParams('B');
+  syncMaterials(); syncShader(); syncScene(); syncBloom();
+  buildParamFolders();
+  rebuildLenses();
+  guiRefresh();
+  setStatus('reset to built-in defaults');
+}
+
+// -------------------------------------------------------------------------
+// STL export
+// -------------------------------------------------------------------------
+function buildSolidForExport(isB) {
+  const W = state.panelWidth, H = state.panelHeight;
+  const res = Math.min(state.resolution, 2.0);
+  const nx = Math.max(4, Math.floor(W / res) + 1);
+  const ny = Math.max(4, Math.floor(H / res) + 1);
+  const type = LENS_TYPES[isB ? state.lensTypeB : state.lensType];
+  const heightFn = type.fn(isB ? state.paramsB : state.params, W, H);
+  const thickness = isB ? state.thicknessB : state.thickness;
+
+  const verts = [];
+  const vert = (x, y, z) => { const id = verts.length / 3; verts.push(x, y, z); return id; };
+  const topIds = [], botIds = [];
+  for (let i = 0; i < ny; i++) {
+    const y = -H/2 + (i / (ny - 1)) * H;
+    const rowT = [], rowB = [];
+    for (let j = 0; j < nx; j++) {
+      const x = -W/2 + (j / (nx - 1)) * W;
+      rowT.push(vert(x, y, heightFn(x, y)));
+    }
+    for (let j = 0; j < nx; j++) {
+      const x = -W/2 + (j / (nx - 1)) * W;
+      rowB.push(vert(x, y, -thickness));
+    }
+    topIds.push(rowT); botIds.push(rowB);
+  }
+  const triangles = [];
+  for (let i = 0; i < ny - 1; i++) for (let j = 0; j < nx - 1; j++) {
+    const a = topIds[i][j], b = topIds[i][j+1], c = topIds[i+1][j+1], d = topIds[i+1][j];
+    triangles.push(a, b, c, a, c, d);
+  }
+  for (let i = 0; i < ny - 1; i++) for (let j = 0; j < nx - 1; j++) {
+    const a = botIds[i][j], b = botIds[i][j+1], c = botIds[i+1][j+1], d = botIds[i+1][j];
+    triangles.push(a, c, b, a, d, c);
+  }
+  for (let j = 0; j < nx - 1; j++) {
+    const t1 = topIds[0][j], t2 = topIds[0][j+1], b1 = botIds[0][j], b2 = botIds[0][j+1];
+    triangles.push(t1, b1, b2, t1, b2, t2);
+    const ut1 = topIds[ny-1][j], ut2 = topIds[ny-1][j+1], ub1 = botIds[ny-1][j], ub2 = botIds[ny-1][j+1];
+    triangles.push(ut1, ub2, ub1, ut1, ut2, ub2);
+  }
+  for (let i = 0; i < ny - 1; i++) {
+    const t1 = topIds[i][0], t2 = topIds[i+1][0], b1 = botIds[i][0], b2 = botIds[i+1][0];
+    triangles.push(t1, b2, b1, t1, t2, b2);
+    const rt1 = topIds[i][nx-1], rt2 = topIds[i+1][nx-1], rb1 = botIds[i][nx-1], rb2 = botIds[i+1][nx-1];
+    triangles.push(rt1, rb1, rb2, rt1, rb2, rt2);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(triangles);
+  geo.computeVertexNormals();
+  return new THREE.Mesh(geo, lensMaterial);
+}
+function doExportSTL(isB) {
+  try {
+    setStatus(`building high-res solid for export (${isB ? 'B' : 'A'})…`);
+    const solid = buildSolidForExport(isB);
+    const bin = new STLExporter().parse(solid, { binary: true });
+    const blob = new Blob([bin], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    const which = isB ? state.lensTypeB : state.lensType;
+    const fname = `prismatica_${which}${isB ? '_B' : ''}_${state.panelWidth}x${state.panelHeight}.stl`;
+    a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+    solid.geometry.dispose();
+    setStatus(`exported ${fname}`);
+  } catch (e) { console.error(e); setStatus('export failed — see console'); }
+}
+function doScreenshot() {
+  renderFrame();
+  const text = (state.watermarkText || '').trim();
+  if (text) {
+    // Paint watermark on a copy so we don't disturb the live canvas.
+    const src = renderer.domElement;
+    const c = document.createElement('canvas');
+    c.width = src.width; c.height = src.height;
+    const cx = c.getContext('2d');
+    cx.drawImage(src, 0, 0);
+    drawWatermark(cx, c.width, c.height);
+    c.toBlob((blob) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `prismatica_${state.lensType}_${Date.now()}.png`;
+      a.click();
+      setStatus('screenshot saved');
+    });
+    return;
+  }
+  renderer.domElement.toBlob((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `prismatica_${state.lensType}_${Date.now()}.png`;
+    a.click();
+    setStatus('screenshot saved');
+  });
+}
+
+// -------------------------------------------------------------------------
+// GUI
+// -------------------------------------------------------------------------
+const gui = new GUI({ title: 'Prismatica — Lens' });
+let fA = null, paramFolderA = null, paramFolderB = null, paramFolderMatB = null;
+let presetDropdownCtrl;
+
+function guiRefresh() {
+  for (const c of gui.controllersRecursive()) c.updateDisplay();
+}
+
+const PARAM_UNITS = {
+  wavelength: 'mm', wavelength_x: 'mm', wavelength_y: 'mm',
+  amplitude: 'mm',
+  torus_outer_r: 'mm', torus_inner_r: 'mm', torus_height: 'mm',
+  cell_size: 'mm', cell_depth: 'mm',
+  min_r: 'mm', max_r: 'mm', min_h: 'mm', max_h: 'mm',
+  pyramid_h: 'mm', radius: 'mm', height: 'mm', size: 'mm',
+  rotation: '°',
+};
+function labelFor(k) { return PARAM_UNITS[k] ? `${k} (${PARAM_UNITS[k]})` : k; }
+
+function clearFolder(f) {
+  if (!f) return;
+  for (const c of [...f.controllers]) c.destroy();
+  for (const sf of [...f.folders]) sf.destroy();
+}
+
+function buildParamFolders() {
+  // Shape A — nested inside the A · lens folder so it sits right under the type dropdown.
+  if (!paramFolderA) paramFolderA = fA.addFolder('shape');
+  clearFolder(paramFolderA);
+  const defsA = LENS_TYPES[state.lensType].params;
+  for (const k in defsA) {
+    const d = defsA[k];
+    if (typeof d.value === 'boolean') paramFolderA.add(state.params, k).name(labelFor(k)).onChange(rebuildLenses);
+    else paramFolderA.add(state.params, k, d.min, d.max, d.step).name(labelFor(k)).onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  }
+
+  if (!state.compare) {
+    if (paramFolderB)    { paramFolderB.destroy();    paramFolderB = null; }
+    if (paramFolderMatB) { paramFolderMatB.destroy(); paramFolderMatB = null; }
+    return;
+  }
+
+  if (!paramFolderB) {
+    paramFolderB = gui.addFolder('B · shape');
+    paramFolderB.add(state, 'lensTypeB', Object.fromEntries(Object.entries(LENS_TYPES).map(([k, v]) => [v.label, k])))
+      .name('type').onChange(() => { loadLensParams('B'); buildParamFolders(); rebuildLenses(); });
+  } else {
+    // Keep the type dropdown, wipe everything after it
+    const keep = paramFolderB.controllers[0];
+    for (const c of [...paramFolderB.controllers]) if (c !== keep) c.destroy();
+  }
+  const defsB = LENS_TYPES[state.lensTypeB].params;
+  for (const k in defsB) {
+    const d = defsB[k];
+    if (typeof d.value === 'boolean') paramFolderB.add(state.paramsB, k).name(labelFor(k)).onChange(rebuildLenses);
+    else paramFolderB.add(state.paramsB, k, d.min, d.max, d.step).name(labelFor(k)).onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  }
+
+  if (!paramFolderMatB) paramFolderMatB = gui.addFolder('B · acrylic');
+  clearFolder(paramFolderMatB);
+  paramFolderMatB.add(state, 'iorB', 1.0, 2.0, 0.01).name('ior').onChange(syncMaterials);
+  paramFolderMatB.add(state, 'dispersionB', 0.0, 20.0, 0.1).name('dispersion (rainbow)').onChange(syncMaterials);
+  paramFolderMatB.add(state, 'thicknessB', 1, 120, 1).name('thickness (mm)').onChange(syncMaterials).onFinishChange(rebuildLenses);
+  paramFolderMatB.add(state, 'roughnessB', 0, 0.5, 0.005).name('roughness').onChange(syncMaterials);
+  paramFolderMatB.addColor(state, 'tintB').name('tint').onChange(syncMaterials);
+  paramFolderMatB.add(state, 'exportSTLB').name('export STL (B)');
+}
+
+function refreshPresetDropdown() {
+  if (!presetDropdownCtrl) return;
+  const presets = loadPresets();
+  const opts = { '—': '—' };
+  for (const k of Object.keys(presets).sort()) opts[k] = k;
+  presetDropdownCtrl.options(opts);
+  presetDropdownCtrl.setValue(state.currentPreset in opts ? state.currentPreset : '—');
+}
+
+// Needs to be in scope before buildGUI reads it for the dropdown options.
+// Aspect ratios (width/height). Combined with REC_RESOLUTIONS to compute final pixel dims.
+const REC_ASPECTS = {
+  'native':       null,
+  '1:1 square':   1,
+  '4:5 portrait': 4/5,
+  '9:16 reels':   9/16,
+  '16:9 wide':    16/9,
+};
+// Output resolution tiers, measured in px on the short side.
+// e.g. 4K at 9:16 = 2160×3840; 4K at 16:9 = 3840×2160; 4K at 1:1 = 2160×2160.
+const REC_RESOLUTIONS = {
+  '720p (HD)':       720,
+  '1080p (Full HD)': 1080,
+  '1440p (2K)':      1440,
+  '2160p (4K)':      2160,
+  '4320p (8K)':      4320,
+};
+function getRecDims() {
+  const ratio = REC_ASPECTS[state.recAspect];
+  if (ratio == null) return null;  // native — computed from renderer canvas at render time
+  const short = REC_RESOLUTIONS[state.recResolution] || 1080;
+  let w, h;
+  if (ratio >= 1) { h = short; w = Math.round(short * ratio); }
+  else            { w = short; h = Math.round(short / ratio); }
+  return [w & ~1, h & ~1];
+}
+
+// =========================================================================
+// SHOT SEQUENCE — SketchUp-style ordered scenes with timed transitions
+// Each shot = { pose, transitionSec, holdSec }
+//   pose = { px,py,pz, tx,ty,tz, zoom }
+//   transitionSec = time (s) to fly FROM previous shot TO this one (ignored for first)
+//   holdSec       = time (s) to linger on this shot after arriving
+// Total clip = sum of (transition + hold) for each shot (first shot's transition = 0)
+// =========================================================================
+const SEQUENCE_KEY = 'prismatica.shotSequence.v1';
+let shotSequence = [];
+try {
+  const raw = JSON.parse(localStorage.getItem(SEQUENCE_KEY) || '[]');
+  if (Array.isArray(raw)) shotSequence = raw;
+} catch (_) { shotSequence = []; }
+let sequencePlaying = false;   // live preview running (drives camera each frame)
+let sequenceStartMs = 0;
+let sequenceRenderActive = false;  // true during offline sequence render
+
+function saveShotSequence() {
+  try { localStorage.setItem(SEQUENCE_KEY, JSON.stringify(shotSequence)); } catch (_) {}
+}
+function currentPose() {
+  return {
+    px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+    tx: controls.target.x, ty: controls.target.y, tz: controls.target.z,
+    zoom: camera.zoom,
+  };
+}
+function applyPose(pose) {
+  if (!pose) return;
+  if (updateCameraMotion._lastPanDy) {
+    camera.position.y -= updateCameraMotion._lastPanDy;
+    updateCameraMotion._lastPanDy = 0;
+  }
+  camera.position.set(pose.px, pose.py, pose.pz);
+  controls.target.set(pose.tx, pose.ty, pose.tz);
+  if (typeof pose.zoom === 'number') { camera.zoom = pose.zoom; camera.updateProjectionMatrix(); }
+  camera.lookAt(controls.target);
+}
+function addShotToSequence() {
+  shotSequence.push({
+    pose: currentPose(),
+    transitionSec: state.seqDefaultTransition,
+    holdSec: state.seqDefaultHold,
+  });
+  saveShotSequence();
+  rebuildSequenceGUI();
+  setStatus(`➕ added shot ${shotSequence.length} — sequence now ${sequenceTotalDuration().toFixed(1)}s`);
+}
+function removeShotFromSequence(i) {
+  if (i < 0 || i >= shotSequence.length) return;
+  shotSequence.splice(i, 1);
+  saveShotSequence();
+  rebuildSequenceGUI();
+  setStatus(`removed shot ${i + 1}`);
+}
+function replaceShotInSequence(i) {
+  if (i < 0 || i >= shotSequence.length) return;
+  shotSequence[i].pose = currentPose();
+  saveShotSequence();
+  setStatus(`shot ${i + 1} replaced with current view`);
+}
+function loadShotPose(i) {
+  if (i < 0 || i >= shotSequence.length) return;
+  applyPose(shotSequence[i].pose);
+  controls.update();
+  orbitHomeAzimuth = null;
+  orbitHomeElevation = null;
+  orbitPhase = 0;
+  zoomBaseDist = null;
+  zoomPhase = 0;
+  panPhase = 0;
+  setStatus(`▶ jumped to shot ${i + 1}`);
+}
+function moveShotInSequence(i, dir) {
+  const j = i + dir;
+  if (i < 0 || i >= shotSequence.length || j < 0 || j >= shotSequence.length) return;
+  const tmp = shotSequence[i];
+  shotSequence[i] = shotSequence[j];
+  shotSequence[j] = tmp;
+  saveShotSequence();
+  rebuildSequenceGUI();
+}
+function clearShotSequence() {
+  shotSequence = [];
+  saveShotSequence();
+  rebuildSequenceGUI();
+  setStatus('cleared shot sequence');
+}
+function sequenceTotalDuration() {
+  if (shotSequence.length === 0) return 0;
+  let total = shotSequence[0].holdSec || 0;
+  for (let i = 1; i < shotSequence.length; i++) {
+    total += (shotSequence[i].transitionSec || 0) + (shotSequence[i].holdSec || 0);
+  }
+  return Math.max(0.1, total);
+}
+
+// --- Easing curves (t in [0,1] → eased t) ---
+const EASINGS = {
+  'linear':       t => t,
+  'ease-in-out':  t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2,   // cubic
+  'ease-in':      t => t * t * t,
+  'ease-out':     t => 1 - Math.pow(1 - t, 3),
+  'smooth (quintic)': t => t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2,
+};
+
+// --- Pose interpolation — SLERP of direction around target for orbital arcs ---
+const _tmpA = new THREE.Vector3();
+const _tmpB = new THREE.Vector3();
+function lerpPose(A, B, tRaw, ease) {
+  const t = ease(Math.max(0, Math.min(1, tRaw)));
+  const tx = A.tx + (B.tx - A.tx) * t;
+  const ty = A.ty + (B.ty - A.ty) * t;
+  const tz = A.tz + (B.tz - A.tz) * t;
+  _tmpA.set(A.px - A.tx, A.py - A.ty, A.pz - A.tz);
+  _tmpB.set(B.px - B.tx, B.py - B.ty, B.pz - B.tz);
+  const la = _tmpA.length(), lb = _tmpB.length();
+  const radius = la + (lb - la) * t;
+  const ua = _tmpA.clone().normalize();
+  const ub = _tmpB.clone().normalize();
+  const cosA = Math.max(-1, Math.min(1, ua.dot(ub)));
+  let dir;
+  if (cosA > 0.9995) {
+    dir = ua.lerp(ub, t).normalize();
+  } else {
+    const omega = Math.acos(cosA);
+    const sinO = Math.sin(omega);
+    const sa = Math.sin((1 - t) * omega) / sinO;
+    const sb = Math.sin(t * omega) / sinO;
+    dir = ua.multiplyScalar(sa).add(ub.multiplyScalar(sb));
+  }
+  return {
+    px: tx + dir.x * radius,
+    py: ty + dir.y * radius,
+    pz: tz + dir.z * radius,
+    tx, ty, tz,
+    zoom: (A.zoom || 1) + ((B.zoom || 1) - (A.zoom || 1)) * t,
+  };
+}
+
+// Given elapsed time (s), return the pose the camera should be at.
+function evaluateSequenceAt(elapsedSec) {
+  if (shotSequence.length === 0) return null;
+  if (shotSequence.length === 1) return shotSequence[0].pose;
+  let cursor = 0;
+  // First shot: hold from 0 to its holdSec
+  const firstHold = shotSequence[0].holdSec || 0;
+  if (elapsedSec < firstHold) return shotSequence[0].pose;
+  cursor = firstHold;
+  const easeFn = EASINGS[state.seqEasing] || EASINGS['ease-in-out'];
+  for (let i = 1; i < shotSequence.length; i++) {
+    const trans = shotSequence[i].transitionSec || 0;
+    const hold = shotSequence[i].holdSec || 0;
+    if (elapsedSec < cursor + trans) {
+      const localT = trans > 0 ? (elapsedSec - cursor) / trans : 1;
+      return lerpPose(shotSequence[i - 1].pose, shotSequence[i].pose, localT, easeFn);
+    }
+    cursor += trans;
+    if (elapsedSec < cursor + hold) return shotSequence[i].pose;
+    cursor += hold;
+  }
+  return shotSequence[shotSequence.length - 1].pose;
+}
+
+function playSequencePreview() {
+  if (shotSequence.length < 1) { setStatus('add at least one shot first'); return; }
+  if (sequencePlaying) return;
+  sequencePlaying = true;
+  sequenceStartMs = performance.now();
+  setStatus(`▶ previewing sequence (${sequenceTotalDuration().toFixed(1)}s)`);
+}
+function stopSequencePreview() {
+  if (!sequencePlaying) return;
+  sequencePlaying = false;
+  // Recapture auto-motion homes from wherever we landed
+  orbitHomeAzimuth = null;
+  orbitHomeElevation = null;
+  orbitPhase = 0;
+  zoomBaseDist = null;
+  zoomPhase = 0;
+  panPhase = 0;
+  setStatus('preview stopped');
+}
+
+// Wire into state actions (after function defs so closures work)
+state.seqAddShot     = () => { addShotToSequence(); };
+state.seqPreview     = () => { playSequencePreview(); };
+state.seqStopPreview = () => { stopSequencePreview(); };
+state.seqClearAll    = () => { clearShotSequence(); };
+state.seqExport      = () => { renderOffline({ sequence: true }); };
+
+// --- Shot sequence GUI section — rebuilt on every add/remove/move ---
+let fSeq = null;
+const seqShotFolders = [];  // sub-folders for each shot
+function rebuildSequenceGUI() {
+  if (!fSeq) return;
+  // Remove old sub-folders
+  for (const f of seqShotFolders) { try { f.destroy(); } catch (_) {} }
+  seqShotFolders.length = 0;
+  // Add one subfolder per shot
+  for (let i = 0; i < shotSequence.length; i++) {
+    const shot = shotSequence[i];
+    const fs = fSeq.addFolder(`Shot ${i + 1}${i === 0 ? ' (start)' : ''}`);
+    fs.close();
+    const acts = {
+      load:    () => loadShotPose(i),
+      replace: () => replaceShotInSequence(i),
+      del:     () => removeShotFromSequence(i),
+      up:      () => moveShotInSequence(i, -1),
+      down:    () => moveShotInSequence(i, +1),
+    };
+    fs.add(acts, 'load').name('▶ jump to this shot');
+    fs.add(acts, 'replace').name('⟳ replace with current view');
+    if (i > 0) fs.add(shot, 'transitionSec', 0, 20, 0.1).name('transition from prev (s)').onChange(saveShotSequence);
+    fs.add(shot, 'holdSec', 0, 10, 0.1).name('hold on this shot (s)').onChange(saveShotSequence);
+    if (i > 0) fs.add(acts, 'up').name('↑ move earlier');
+    if (i < shotSequence.length - 1) fs.add(acts, 'down').name('↓ move later');
+    fs.add(acts, 'del').name('× delete this shot');
+    seqShotFolders.push(fs);
+  }
+  // Update the info controller if it exists
+  if (fSeq.__infoCtrl) {
+    const info = shotSequence.length === 0
+      ? 'no shots yet — frame a view, hit "save shot"'
+      : `${shotSequence.length} shots · total ${sequenceTotalDuration().toFixed(1)}s`;
+    fSeq.__infoCtrl.name(info);
+  }
+}
+
+// Build GUI structure
+(function buildGUI() {
+  fA = gui.addFolder('A · lens');
+  fA.add(state, 'lensType', Object.fromEntries(Object.entries(LENS_TYPES).map(([k, v]) => [v.label, k])))
+    .name('type').onChange(() => { loadLensParams('A'); buildParamFolders(); rebuildLenses(); });
+  // Create the shape sub-folder up front so it sits directly under the type dropdown.
+  paramFolderA = fA.addFolder('shape');
+  fA.add(state, 'panelWidth', 100, 2000, 10).name('panel W (mm)').onFinishChange(rebuildLenses);
+  fA.add(state, 'panelHeight', 100, 2000, 10).name('panel H (mm)').onFinishChange(rebuildLenses);
+  fA.add(state, 'resolution', 0.5, 8.0, 0.5).name('mesh res (mm)').onFinishChange(rebuildLenses);
+  fA.add(state, 'smoothing', 0, 6, 1).name('surface smoothing').onFinishChange(rebuildLenses);
+  fA.add(state, 'compare').name('compare A | B').onChange(() => { buildParamFolders(); rebuildLenses(); });
+  fA.add(state, 'loadLogo').name('load logo…');
+
+  buildParamFolders();
+
+  const f1 = gui.addFolder('A · acrylic');
+  f1.add(state, 'ior', 1.0, 2.0, 0.01).onChange(syncMaterials);
+  f1.add(state, 'dispersion', 0.0, 20.0, 0.1).name('dispersion (rainbow)').onChange(syncMaterials);
+  f1.add(state, 'thickness', 1, 120, 1).name('thickness (mm)').onChange(syncMaterials).onFinishChange(rebuildLenses);
+  f1.add(state, 'roughness', 0.0, 0.5, 0.005).onChange(syncMaterials);
+  f1.addColor(state, 'tint').onChange(syncMaterials);
+
+  const f2 = gui.addFolder('LED Panel');
+  f2.add(state, 'panelMode', { checker: 0, pixelgrid: 1, wave: 2, radial: 3, scanlines: 4, noise: 5, white: 6, image: 7, video: 8, stars: 9, spiral: 10, rings: 11, rays: 12, squares: 13 })
+    .name('content').onChange(v => { const m = +v; state.panelMode = m; ledMat.uniforms.uMode.value = m; ledMatB.uniforms.uMode.value = m; });
+  f2.add(state, 'panelScale', 4, 200, 1).name('pixels').onChange(v => { ledMat.uniforms.uScale.value = v; ledMatB.uniforms.uScale.value = v; });
+  f2.add(state, 'panelSpeed', 0.0, 3.0, 0.05).name('speed').onChange(v => { ledMat.uniforms.uSpeed.value = v; ledMatB.uniforms.uSpeed.value = v; });
+  f2.add(state, 'panelBrightness', 0.2, 6.0, 0.05).name('brightness').onChange(v => { ledMat.uniforms.uBrightness.value = v; ledMatB.uniforms.uBrightness.value = v; });
+  f2.add(state, 'panelHue', 0.0, 1.0, 0.01).name('hue shift').onChange(v => { ledMat.uniforms.uHueShift.value = v; ledMatB.uniforms.uHueShift.value = v; });
+  f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { ledPanel.position.z = -(state.thickness + state.panelDistance); ledPanelB.position.z = -(state.thicknessB + state.panelDistance); });
+  f2.add(state, 'panelSmooth').name('smooth panel (anti-alias)').onChange(v => { ledMat.uniforms.uPanelSmooth.value = v ? 1 : 0; ledMatB.uniforms.uPanelSmooth.value = v ? 1 : 0; });
+  f2.add(state, 'loadImage').name('load image…');
+  f2.add(state, 'loadVideo').name('load video…');
+  f2.add(state, 'clearMedia').name('clear media');
+
+  const f2s = f2.addFolder('Squares');
+  f2s.add(state, 'sqThickness', 0.02, 0.98, 0.01).name('thickness').onChange(v => { ledMat.uniforms.uSqThickness.value = v; ledMatB.uniforms.uSqThickness.value = v; });
+  f2s.add(state, 'sqSoftness', 0.0, 1.0, 0.01).name('softness').onChange(v => { ledMat.uniforms.uSqSoftness.value = v; ledMatB.uniforms.uSqSoftness.value = v; });
+  f2s.add(state, 'sqHueSpread', 0.0, 8.0, 0.1).name('hue spread').onChange(v => { ledMat.uniforms.uSqHueSpread.value = v; ledMatB.uniforms.uSqHueSpread.value = v; });
+  f2s.add(state, 'sqMono').name('black & white').onChange(v => { ledMat.uniforms.uSqMono.value = v ? 1 : 0; ledMatB.uniforms.uSqMono.value = v ? 1 : 0; });
+  f2s.add(state, 'sqReverse').name('reverse direction').onChange(v => { ledMat.uniforms.uSqDir.value = v ? -1.0 : 1.0; ledMatB.uniforms.uSqDir.value = v ? -1.0 : 1.0; });
+  // Gradient overlay — baked into the panel, so the lens magnifies & stretches it
+  // through refraction whenever the camera moves. Great for filming lots of perspectives.
+  const f2sg = f2s.addFolder('Gradient overlay');
+  f2sg.add(state, 'sqGradient').name('enable gradient').onChange(v => { ledMat.uniforms.uSqGrad.value = v ? 1 : 0; ledMatB.uniforms.uSqGrad.value = v ? 1 : 0; });
+  f2sg.addColor(state, 'sqGradA').name('colour A').onChange(v => { ledMat.uniforms.uSqGradA.value.set(v); ledMatB.uniforms.uSqGradA.value.set(v); });
+  f2sg.addColor(state, 'sqGradB').name('colour B').onChange(v => { ledMat.uniforms.uSqGradB.value.set(v); ledMatB.uniforms.uSqGradB.value.set(v); });
+  f2sg.addColor(state, 'sqGradC').name('colour C').onChange(v => { ledMat.uniforms.uSqGradC.value.set(v); ledMatB.uniforms.uSqGradC.value.set(v); });
+  f2sg.add(state, 'sqGradAxis', { radial: 0, horizontal: 1, vertical: 2, diagonal: 3, angular: 4 })
+    .name('axis').onChange(v => { const n = +v | 0; state.sqGradAxis = n; ledMat.uniforms.uSqGradAxis.value = n; ledMatB.uniforms.uSqGradAxis.value = n; });
+  f2sg.add(state, 'sqGradScale', 0.25, 6.0, 0.05).name('scale (bands)').onChange(v => { ledMat.uniforms.uSqGradScale.value = v; ledMatB.uniforms.uSqGradScale.value = v; });
+  f2sg.add(state, 'sqGradFlow', -1.0, 1.0, 0.01).name('flow speed').onChange(v => { ledMat.uniforms.uSqGradFlow.value = v; ledMatB.uniforms.uSqGradFlow.value = v; });
+
+  const fScene = gui.addFolder('Scene');
+  fScene.addColor(state, 'bgColor').name('background').onChange(syncScene);
+  fScene.add(state, 'lensSpin', -180, 180, 1).name('lens spin (°/s)');
+  const fBloom = fScene.addFolder('Bloom');
+  fBloom.add(state, 'bloomEnabled').name('enabled').onChange(syncBloom);
+  fBloom.add(state, 'bloomStrength', 0.0, 2.0, 0.01).name('strength').onChange(syncBloom);
+  fBloom.add(state, 'bloomRadius', 0.0, 1.5, 0.01).name('radius').onChange(syncBloom);
+  fBloom.add(state, 'bloomThreshold', 0.0, 1.0, 0.01).name('threshold').onChange(syncBloom);
+
+  fSeq = gui.addFolder('Shot Sequence (storyboard)');
+  fSeq.add(state, 'seqAddShot').name('➕ save shot (current view)  [N]');
+  fSeq.add(state, 'seqPreview').name('▶ preview sequence  [Enter]');
+  fSeq.add(state, 'seqStopPreview').name('⏹ stop preview');
+  fSeq.add(state, 'seqExport').name('🎬 export sequence as video');
+  fSeq.add(state, 'seqEasing', Object.keys(EASINGS)).name('easing curve');
+  fSeq.add(state, 'seqDefaultTransition', 0.1, 15, 0.1).name('default transition (s)');
+  fSeq.add(state, 'seqDefaultHold', 0, 5, 0.1).name('default hold (s)');
+  fSeq.add(state, 'seqClearAll').name('× clear all shots');
+  // Info line — shows shot count + total duration, updated after rebuild
+  fSeq.__infoCtrl = fSeq.add({ _info: 'no shots yet — frame a view, hit "save shot"' }, '_info').name('—').disable();
+  // Build the per-shot sub-folders now
+  rebuildSequenceGUI();
+
+  const fCap = gui.addFolder('Capture');
+  fCap.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('quality').onChange(applyRenderQuality);
+  fCap.add(state, 'autoOrbit').name('auto orbit').onChange(() => { orbitHomeAzimuth = null; });
+  fCap.add(state, 'orbitSpeed', 0.005, 0.2, 0.005).name('orbit speed');
+  fCap.add(state, 'orbitArc', 10, 90, 1).name('orbit arc (°)');
+  fCap.add(state, 'autoZoom').name('auto zoom');
+  fCap.add(state, 'zoomAmount', 0.02, 0.8, 0.01).name('zoom range');
+  fCap.add(state, 'zoomSpeed', 0.01, 0.5, 0.005).name('zoom speed');
+  fCap.add(state, 'autoPan').name('auto pan (up/down)').onChange(() => { updateCameraMotion._lastPanDy = 0; panPhase = 0; });
+  fCap.add(state, 'panAmount', 0.02, 0.6, 0.01).name('pan range');
+  fCap.add(state, 'panSpeed', 0.01, 0.3, 0.005).name('pan speed');
+  fCap.add(state, 'recAspect', Object.keys(REC_ASPECTS)).name('video aspect').onChange(updateAspectOverlay);
+  fCap.add(state, 'recResolution', Object.keys(REC_RESOLUTIONS)).name('output resolution');
+  fCap.add(state, 'recFps', { '24 (cinematic)': 24, '30 (Instagram)': 30, '60 (smooth)': 60 }).name('video fps');
+  fCap.add(state, 'recDuration', 1, 60, 1).name('duration (s)');
+  fCap.add(state, 'recLoop').name('loopable (reels)');
+  fCap.add(state, 'snapToLoop').name('⤴ snap speeds to loop');
+  fCap.add(state, 'renderSmooth', ['off (fast)', '2× (clean)', '3× (pristine)']).name('smoothing (SSAA)');
+  fCap.add(state, 'maxQualityExport').name('★ max quality on export');
+  fCap.add(state, 'watermarkText').name('watermark');
+  fCap.add(state, 'offlineRender').name('▶ export video (offline)');
+  fCap.add(state, 'abortOfflineRender').name('■ stop render');
+  fCap.add(state, 'toggleRecord').name('● live record / stop');
+
+  const fP = gui.addFolder('Presets');
+  presetDropdownCtrl = fP.add(state, 'currentPreset', { '—': '—' })
+    .name('preset').onChange((name) => {
+      if (!name || name === '—') return;
+      const p = loadPresets()[name];
+      if (p) { applyPreset(p); state.currentPreset = name; guiRefresh(); setStatus(`loaded "${name}"`); }
+    });
+  fP.add(state, 'savePreset').name('save as…');
+  fP.add(state, 'deletePreset').name('delete current');
+  fP.add(state, 'exportPresets').name('export JSON');
+  fP.add(state, 'importPresets').name('import JSON');
+  fP.add(state, 'saveAsDefaults').name('★ save current as defaults');
+  fP.add(state, 'clearDefaults').name('clear saved defaults');
+  refreshPresetDropdown();
+
+  const fB = gui.addFolder('Bundles');
+  for (const key of Object.keys(BUNDLES)) {
+    const b = BUNDLES[key];
+    const proxy = {}; proxy[key] = () => applyBundle(key);
+    fB.add(proxy, key).name(b.label);
+  }
+
+  const f3 = gui.addFolder('Actions');
+  f3.add(state, 'toggleEcoMode').name('⚡ eco mode / restore (E)');
+  f3.add(state, 'togglePause').name('⏯ pause / resume (P)');
+  f3.add(state, 'reset').name('reset');
+  f3.add(state, 'exportSTL').name('export STL (A)');
+  f3.add(state, 'screenshot').name('save screenshot');
+})();
+
+// -------------------------------------------------------------------------
+// Init + loop
+// -------------------------------------------------------------------------
+rebuildLenses();
+syncMaterials();
+syncShader();
+syncScene();
+syncBloom();
+applyRenderQuality(state.renderQuality);
+
+// Startup: prefer user-saved defaults, then fall back to preset "1", then built-ins.
+(function autoLoadDefaults() {
+  const saved = loadSavedDefaults();
+  if (saved) {
+    applyPreset(saved);
+    refreshPresetDropdown();
+    guiRefresh();
+    setStatus('loaded saved defaults');
+    return;
+  }
+  const presets = loadPresets();
+  if (presets['1']) {
+    applyPreset(presets['1']);
+    state.currentPreset = '1';
+    refreshPresetDropdown();
+    guiRefresh();
+    setStatus('loaded preset "1"');
+  }
+})();
+
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+  bloomPass.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  updateAspectOverlay();
+});
+
+const clock = new THREE.Clock();
+let fpsAccum = 0, fpsFrames = 0, fpsLast = performance.now();
+const fpsEl = document.createElement('div');
+fpsEl.id = 'fps';
+document.body.appendChild(fpsEl);
+
+// --- camera auto-motion state ---
+let zoomBaseDist = null;
+let zoomPhase = 0;
+let orbitHomeAzimuth = null, orbitHomeElevation = null, orbitPhase = 0;
+let panPhase = 0;
+let loopCameraMode = false;   // set by offline render when recLoop is on
+function updateCameraMotion(dt) {
+  // In loop mode we force elevation to the same frequency as azimuth and clamp
+  // all phases to a single [0..1] cycle per duration so the last frame matches the first.
+  const elFreq = loopCameraMode ? 1.0 : 0.63;
+  // While the user is dragging the camera — OR a sequence is driving the camera —
+  // skip all position-writing auto-motion. Lens spin still runs.
+  if (userInteractingWithCamera || sequencePlaying || sequenceRenderActive) {
+    if (state.lensSpin) {
+      const spinRad = state.lensSpin * Math.PI / 180 * dt;
+      if (lensMesh) lensMesh.rotation.z += spinRad;
+      if (lensMeshB) lensMeshB.rotation.z += spinRad;
+    }
+    return;
+  }
+  if (state.autoOrbit) {
+    const rel = camera.position.clone().sub(controls.target);
+    const radius = rel.length();
+    if (orbitHomeAzimuth === null) {
+      orbitHomeAzimuth = Math.atan2(rel.x, rel.z);
+      orbitHomeElevation = Math.asin(rel.y / Math.max(0.001, radius));
+      orbitPhase = 0;
+    }
+    orbitPhase += dt * state.orbitSpeed;
+    // Sway ±orbitArc° around the starting azimuth, with gentler vertical bob.
+    const azArc = (state.orbitArc * Math.PI) / 180;
+    const elArc = azArc * 0.28;
+    const azimuth = orbitHomeAzimuth + azArc * Math.sin(orbitPhase * Math.PI * 2);
+    const elevation = orbitHomeElevation + elArc * Math.sin(orbitPhase * Math.PI * 2 * elFreq);
+    const planar = radius * Math.cos(elevation);
+    camera.position.x = controls.target.x + planar * Math.sin(azimuth);
+    camera.position.z = controls.target.z + planar * Math.cos(azimuth);
+    camera.position.y = controls.target.y + radius * Math.sin(elevation);
+  } else {
+    orbitHomeAzimuth = null;
+  }
+  if (state.autoZoom) {
+    const curDist = camera.position.distanceTo(controls.target);
+    if (zoomBaseDist === null) zoomBaseDist = curDist;
+    zoomPhase += dt * state.zoomSpeed;
+    const target = zoomBaseDist * (1 + state.zoomAmount * Math.sin(zoomPhase * Math.PI * 2));
+    const ratio = target / Math.max(0.001, curDist);
+    const dir = camera.position.clone().sub(controls.target);
+    dir.multiplyScalar(ratio);
+    camera.position.copy(controls.target).add(dir);
+  } else {
+    zoomBaseDist = null;
+  }
+  if (state.autoPan) {
+    // Gentle vertical sway — lifts and drops the camera around its current height.
+    // Uses the current camera-to-target distance so the effect scales with framing.
+    panPhase += dt * state.panSpeed;
+    const dist = camera.position.distanceTo(controls.target);
+    const dy = dist * state.panAmount * Math.sin(panPhase * Math.PI * 2);
+    // Apply as an offset above the current height — reset each frame so it doesn't drift.
+    camera.position.y += dy - (updateCameraMotion._lastPanDy || 0);
+    updateCameraMotion._lastPanDy = dy;
+  } else if (updateCameraMotion._lastPanDy) {
+    // Undo the last pan offset so disabling returns to the natural height.
+    camera.position.y -= updateCameraMotion._lastPanDy;
+    updateCameraMotion._lastPanDy = 0;
+    panPhase = 0;
+  }
+  if (state.autoOrbit || state.autoZoom || state.autoPan) camera.lookAt(controls.target);
+
+  // Lens spin — rotate the lens mesh (and its B twin) around its Z axis.
+  if (state.lensSpin) {
+    const spinRad = state.lensSpin * Math.PI / 180 * dt;
+    if (lensMesh) lensMesh.rotation.z += spinRad;
+    if (lensMeshB) lensMeshB.rotation.z += spinRad;
+  }
+}
+
+// --- aspect-ratio safe-frame overlay ---
+const aspectOverlay = document.createElement('div');
+aspectOverlay.id = 'aspectOverlay';
+aspectOverlay.style.cssText = 'position:fixed;pointer-events:none;box-shadow:0 0 0 9999px rgba(0,0,0,0.35);border:1px dashed rgba(255,255,255,0.55);display:none;z-index:8;box-sizing:border-box';
+document.body.appendChild(aspectOverlay);
+function updateAspectOverlay() {
+  const ratio = REC_ASPECTS[state.recAspect];
+  if (ratio == null) { aspectOverlay.style.display = 'none'; return; }
+  const targetAR = ratio;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const vAR = vw / vh;
+  let w, h;
+  if (vAR > targetAR) { h = vh; w = vh * targetAR; }
+  else                { w = vw; h = vw / targetAR; }
+  aspectOverlay.style.display = 'block';
+  aspectOverlay.style.width  = w + 'px';
+  aspectOverlay.style.height = h + 'px';
+  aspectOverlay.style.left   = ((vw - w) / 2) + 'px';
+  aspectOverlay.style.top    = ((vh - h) / 2) + 'px';
+}
+
+// --- video recording ---
+let mediaRecorder = null;
+let recordedChunks = [];
+let recTimer = null;
+let recStartMs = 0;
+// Offscreen canvas used when exporting at a non-native aspect ratio (Instagram etc.)
+const recCanvas = document.createElement('canvas');
+const recCtx = recCanvas.getContext('2d');
+let recUsesOffscreen = false;
+
+function pickMime() {
+  const candidates = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  for (const m of candidates) if (MediaRecorder.isTypeSupported(m)) return m;
+  return '';
+}
+
+function drawRecFrame() {
+  if (!recUsesOffscreen) return;
+  const src = renderer.domElement;
+  const sw = src.width, sh = src.height;
+  const dw = recCanvas.width, dh = recCanvas.height;
+  if (!sw || !sh) return;
+  const sAR = sw / sh, dAR = dw / dh;
+  let cx, cy, cw, ch;
+  if (sAR > dAR) {
+    // source wider than target → crop sides
+    ch = sh;
+    cw = sh * dAR;
+    cx = (sw - cw) / 2;
+    cy = 0;
+  } else {
+    // source taller → crop top/bottom
+    cw = sw;
+    ch = sw / dAR;
+    cx = 0;
+    cy = (sh - ch) / 2;
+  }
+  recCtx.drawImage(src, cx, cy, cw, ch, 0, 0, dw, dh);
+  drawWatermark(recCtx, dw, dh);
+}
+
+function drawWatermark(ctx, w, h) {
+  const text = (state.watermarkText || '').trim();
+  if (!text) return;
+  const pad = Math.max(18, Math.round(Math.min(w, h) * 0.02));
+  const fontPx = Math.max(14, Math.round(Math.min(w, h) * 0.022));
+  ctx.save();
+  ctx.font = `500 ${fontPx}px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif`;
+  ctx.textBaseline = 'bottom';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillText(text, pad + 1, h - pad + 1);
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  ctx.fillText(text, pad, h - pad);
+  ctx.restore();
+}
+
+function startRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') return;
+  const dims = getRecDims();
+  let streamSource;
+  if (dims) {
+    recCanvas.width = dims[0];
+    recCanvas.height = dims[1];
+    recCtx.fillStyle = '#000';
+    recCtx.fillRect(0, 0, dims[0], dims[1]);
+    recUsesOffscreen = true;
+    streamSource = recCanvas;
+  } else {
+    recUsesOffscreen = false;
+    streamSource = renderer.domElement;
+  }
+  const fps = Math.max(12, Math.min(60, state.recFps | 0 || 30));
+  const stream = streamSource.captureStream(fps);
+  const mimeType = pickMime();
+  try {
+    mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 16_000_000 });
+  } catch (e) {
+    try { mediaRecorder = new MediaRecorder(stream); }
+    catch (err) { setStatus('recording not supported in this browser'); recUsesOffscreen = false; return; }
+  }
+  recordedChunks = [];
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const tag = state.recAspect.replace(/\s+/g, '_').replace(/[:]/g, 'x');
+    a.download = `prismatica_${tag}_${Date.now()}.webm`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    setStatus(`video saved (${(blob.size / 1048576).toFixed(1)} MB · ${state.recAspect})`);
+    recUsesOffscreen = false;
+  };
+  mediaRecorder.start(250);
+  recStartMs = performance.now();
+  if (recTimer) clearInterval(recTimer);
+  recTimer = setInterval(() => {
+    const s = ((performance.now() - recStartMs) / 1000).toFixed(1);
+    setStatus(`● recording ${state.recAspect} — ${s}s (click again to stop)`);
+  }, 250);
+}
+function stopRecording() {
+  if (recTimer) { clearInterval(recTimer); recTimer = null; }
+  if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+}
+function toggleRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+  else {
+    if (animPaused) setAnimPaused(false);  // auto-resume so we record a live frame
+    startRecording();
+  }
+}
+
+// --- eco mode: flip live view to lowest quality when laptop chugs ---
+let ecoModeActive = false;
+let ecoPreEcoSnapshot = null;
+function toggleEcoMode() {
+  if (!ecoModeActive) {
+    // Enter eco: remember current live-quality knobs, then drop to lowest.
+    ecoPreEcoSnapshot = {
+      renderQuality: state.renderQuality,
+      renderSmooth: state.renderSmooth,
+      bloomEnabled: state.bloomEnabled,
+      autoOrbit: state.autoOrbit,
+      autoZoom: state.autoZoom,
+      autoPan: state.autoPan,
+      panelSmooth: state.panelSmooth,
+    };
+    state.renderQuality = 'eco';
+    applyRenderQuality('eco');
+    state.renderSmooth = 'off (fast)';
+    state.bloomEnabled = false;
+    syncBloom();
+    state.autoOrbit = false;
+    state.autoZoom = false;
+    state.autoPan = false;
+    state.panelSmooth = false;  // saves 4× shader cost in live view
+    ledMat.uniforms.uPanelSmooth.value = 0;
+    ledMatB.uniforms.uPanelSmooth.value = 0;
+    // Keep maxQualityExport on so renders still come out full quality — that's the point.
+    ecoModeActive = true;
+    guiRefresh();
+    setStatus('⚡ eco mode ON — renders still export at max quality');
+  } else {
+    // Restore prior settings
+    if (ecoPreEcoSnapshot) {
+      state.renderQuality = ecoPreEcoSnapshot.renderQuality;
+      applyRenderQuality(state.renderQuality);
+      state.renderSmooth = ecoPreEcoSnapshot.renderSmooth;
+      state.bloomEnabled = ecoPreEcoSnapshot.bloomEnabled;
+      syncBloom();
+      state.autoOrbit = ecoPreEcoSnapshot.autoOrbit;
+      state.autoZoom = ecoPreEcoSnapshot.autoZoom;
+      state.autoPan = ecoPreEcoSnapshot.autoPan;
+      state.panelSmooth = ecoPreEcoSnapshot.panelSmooth;
+      ledMat.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
+      ledMatB.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
+    }
+    ecoModeActive = false;
+    ecoPreEcoSnapshot = null;
+    guiRefresh();
+    setStatus('eco mode OFF — live view restored');
+  }
+}
+
+// --- pause/play ---
+let animPaused = false;
+function setAnimPaused(paused) {
+  animPaused = !!paused;
+  // Reset the clock so dt doesn't jump on resume
+  if (!animPaused) clock.getDelta();
+  setStatus(animPaused ? 'animation paused · press P or click ▶ to resume' : 'animation resumed');
+  guiRefresh();
+}
+
+// --- offline (deterministic) render to MP4 via WebCodecs + mp4-muxer ---
+let offlineInProgress = false;
+let offlineAbortRequested = false;
+let autoPausedForRender = false;
+function abortOfflineRender() {
+  if (!offlineInProgress) return;
+  offlineAbortRequested = true;
+  setStatus('stopping render…');
+  const stats = document.getElementById('roStats');
+  if (stats) stats.textContent = 'stopping…';
+}
+
+// --- render-mode overlay: hides canvas/GUI + shows progress during export ---
+// Removes OS compositor work on the high-res canvas and gives a cleaner UX.
+// Canvas content stays valid (VideoFrame reads its backing buffer regardless of
+// on-screen visibility), so the render itself is unaffected.
+const roEl     = document.getElementById('renderOverlay');
+const roTitle  = document.getElementById('roTitle');
+const roStats  = document.getElementById('roStats');
+const roBarFill = document.getElementById('roBarFill');
+const roStopBtn = document.getElementById('roStopBtn');
+if (roStopBtn) roStopBtn.addEventListener('click', () => abortOfflineRender());
+function showRenderOverlay({ W, H, fps, totalFrames, mode }) {
+  if (!roEl) return;
+  roTitle.textContent = mode === 'sequence' ? 'Rendering sequence…' : 'Rendering…';
+  roStats.innerHTML = `<span class="num">${W}×${H}</span> · ${fps} fps · <span class="num">${totalFrames}</span> frames · preparing encoder…`;
+  roBarFill.style.width = '0%';
+  roEl.classList.add('on');
+  document.body.classList.add('render-mode');
+}
+function updateRenderOverlay({ frame, totalFrames, elapsedMs, W, H, fps }) {
+  if (!roEl) return;
+  const pct = totalFrames > 0 ? (frame / totalFrames) * 100 : 0;
+  const elapsed = elapsedMs / 1000;
+  const eta = frame > 0 ? (elapsed / frame) * (totalFrames - frame) : 0;
+  roBarFill.style.width = `${pct.toFixed(1)}%`;
+  roStats.innerHTML =
+    `<span class="num">${W}×${H}</span> · ${fps} fps · ` +
+    `frame <span class="num">${frame}</span>/${totalFrames} · ` +
+    `<span class="num">${pct.toFixed(0)}%</span> · ` +
+    `elapsed <span class="num">${elapsed.toFixed(0)}s</span> · ` +
+    `eta <span class="num">${eta.toFixed(0)}s</span>`;
+}
+function hideRenderOverlay() {
+  if (!roEl) return;
+  roEl.classList.remove('on');
+  document.body.classList.remove('render-mode');
+}
+async function renderOffline(opts = {}) {
+  if (offlineInProgress) return;
+  if (typeof VideoEncoder === 'undefined') { setStatus('WebCodecs not supported in this browser'); return; }
+
+  // Sequence mode: drive the camera from the shot sequence instead of auto-motion.
+  // Total duration comes from the sequence itself, overriding state.recDuration.
+  const useSequence = !!opts.sequence && shotSequence.length >= 1;
+  if (opts.sequence && shotSequence.length < 1) {
+    setStatus('add at least 1 shot to the sequence before exporting');
+    return;
+  }
+
+  const fps      = Math.max(12, Math.min(60, state.recFps | 0 || 30));
+  const duration = useSequence
+    ? Math.max(0.1, sequenceTotalDuration())
+    : Math.max(1, Math.min(120, state.recDuration | 0 || 10));
+  const totalFrames = Math.max(1, Math.round(fps * duration));
+
+  // MAX QUALITY OVERRIDE — when on, ignore user's preview settings and crank everything
+  // up for the export. Live-view quality stays low (fast preview) but exports are gallery-grade.
+  // Note: user now picks resolution explicitly via recResolution dropdown, so maxQ no longer
+  // upscales dims — it only forces SSAA, transmission, and panel smoothing.
+  const maxQ = !!state.maxQualityExport;
+
+  const dims = getRecDims();
+  let W, H, useOffscreen;
+  if (dims) { W = dims[0]; H = dims[1]; useOffscreen = true; }
+  else      { W = renderer.domElement.width; H = renderer.domElement.height; useOffscreen = false; }
+  // H.264 requires even dimensions
+  W = W & ~1; H = H & ~1;
+
+  // Supersample factor — render at ssaa×output then downscale for clean edges.
+  const ssaaMap = { 'off (fast)': 1, '2× (clean)': 2, '3× (pristine)': 3 };
+  const userSsaa = ssaaMap[state.renderSmooth] || 1;
+  const ssaa = maxQ ? Math.max(userSsaa, 3) : userSsaa;  // max-q forces ≥3×
+  const renderW = (W * ssaa) & ~1;
+  const renderH = (H * ssaa) & ~1;
+
+  let Muxer, ArrayBufferTarget;
+  {
+    const sources = [
+      'https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/+esm',
+      'https://esm.sh/mp4-muxer@5.2.2',
+      'https://esm.sh/mp4-muxer',
+      'https://unpkg.com/mp4-muxer@5.2.2/build/mp4-muxer.mjs',
+    ];
+    let lastErr = null;
+    for (const src of sources) {
+      try {
+        const mod = await import(src);
+        Muxer = mod.Muxer; ArrayBufferTarget = mod.ArrayBufferTarget;
+        if (Muxer && ArrayBufferTarget) { lastErr = null; break; }
+        lastErr = new Error('module missing Muxer / ArrayBufferTarget');
+      } catch (e) { lastErr = e; }
+    }
+    if (!Muxer || !ArrayBufferTarget) {
+      setStatus('mp4-muxer failed to load: ' + (lastErr ? lastErr.message : 'unknown'));
+      return;
+    }
+  }
+
+  // Pick an AVC profile that supports the target resolution.
+  // Max coded area (macroblocks) per H.264 level:
+  //   4.0 → 8,192   (1920×1088)
+  //   4.1 → 8,192
+  //   4.2 → 8,704
+  //   5.0 → 22,080
+  //   5.1 → 36,864  (4096×2304)
+  //   5.2 → 36,864  (allows higher fps)
+  //   6.0 → 139,264 (8K)
+  //   6.2 → 139,264
+  const pickAvcLevel = (w, h) => {
+    const mbs = Math.ceil(w / 16) * Math.ceil(h / 16);
+    if (mbs <= 8192)   return 'avc1.640028'; // 4.0  → 1080p
+    if (mbs <= 22080)  return 'avc1.640032'; // 5.0  → ~2560×1440
+    if (mbs <= 36864)  return 'avc1.640034'; // 5.2  → 4K
+    return 'avc1.64003E';                    // 6.2  → 8K
+  };
+  // Walk up from the suggested codec until we find one the browser will accept.
+  const AVC_LADDER = ['avc1.640028','avc1.640032','avc1.640034','avc1.64003E'];
+  let codec = pickAvcLevel(W, H);
+  const startIdx = AVC_LADDER.indexOf(codec);
+  // Bitrate scales with pixels × fps. Target ~0.12 bits/pixel/frame — high quality without being wasteful.
+  // Clamp to [12 Mbps, 120 Mbps] so small renders aren't starved and 8K doesn't blow out.
+  const targetBitrate = Math.round(Math.max(12_000_000, Math.min(120_000_000, W * H * fps * 0.12)));
+  for (let i = Math.max(0, startIdx); i < AVC_LADDER.length; i++) {
+    try {
+      const sup = await VideoEncoder.isConfigSupported({ codec: AVC_LADDER[i], width: W, height: H, bitrate: targetBitrate, framerate: fps });
+      if (sup && sup.supported) { codec = AVC_LADDER[i]; break; }
+    } catch (_) { /* try next */ }
+  }
+
+  const muxer = new Muxer({
+    target: new ArrayBufferTarget(),
+    video: { codec: 'avc', width: W, height: H, frameRate: fps },
+    fastStart: 'in-memory',
+  });
+
+  let encodeError = null;
+  const encoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => { encodeError = e; console.error(e); },
+  });
+  try {
+    encoder.configure({
+      codec,
+      width: W,
+      height: H,
+      bitrate: targetBitrate,
+      framerate: fps,
+      latencyMode: 'quality',
+    });
+  } catch (e) { setStatus('encoder config failed: ' + e.message); return; }
+
+  // Setup offscreen canvas for aspect crop + SSAA downscale
+  if (useOffscreen) {
+    recCanvas.width = W; recCanvas.height = H; recUsesOffscreen = true;
+    recCtx.imageSmoothingEnabled = true;
+    recCtx.imageSmoothingQuality = 'high';
+  } else {
+    recUsesOffscreen = false;
+  }
+
+  // Save / suspend live state
+  offlineInProgress = true;
+  // Auto-pause live animation while the render runs — keeps the browser snappy.
+  if (!animPaused) { setAnimPaused(true); autoPausedForRender = true; }
+  // Hide canvas + GUI behind a static overlay during the render. Kills compositor
+  // work on a huge canvas (big win at 4K/8K) and gives the user a clean progress UI.
+  showRenderOverlay({ W, H, fps, totalFrames, mode: useSequence ? 'sequence' : 'normal' });
+
+  // Supersample: resize renderer/composer to ssaa×output. Camera aspect matches
+  // the OUTPUT aspect so framing is identical to preview, just at higher pixel
+  // density. drawRecFrame (or for native, the H.264 encoder's internal scale)
+  // does the high-quality downsample into the final W×H frame.
+  const savedRendererW = renderer.domElement.width;
+  const savedRendererH = renderer.domElement.height;
+  const savedPixelRatio = renderer.getPixelRatio();
+  const savedCamAspect = camera.aspect;
+  const savedTransmissionScale = renderer.transmissionResolutionScale;
+  const savedPanelSmooth = ledMat.uniforms.uPanelSmooth.value;
+  // Max-quality override forces the heaviest transmission RT for glass realism,
+  // and always enables panel anti-aliasing (kills scan-line moiré on exports).
+  if (maxQ) {
+    renderer.transmissionResolutionScale = 1.0;
+    ledMat.uniforms.uPanelSmooth.value = 1;
+    ledMatB.uniforms.uPanelSmooth.value = 1;
+  }
+  const outputAspect = W / H;
+  if (useOffscreen) {
+    renderer.setPixelRatio(1);
+    renderer.setSize(renderW, renderH, false);
+    composer.setPixelRatio(1);
+    composer.setSize(renderW, renderH);
+    bloomPass.setSize(renderW, renderH);
+    camera.aspect = outputAspect;
+    camera.updateProjectionMatrix();
+  } else if (ssaa > 1) {
+    // Native aspect: render above target, drawImage to recCanvas for downscale.
+    recCanvas.width = W; recCanvas.height = H;
+    recCtx.imageSmoothingEnabled = true;
+    recCtx.imageSmoothingQuality = 'high';
+    recUsesOffscreen = true;
+    renderer.setPixelRatio(1);
+    renderer.setSize(renderW, renderH, false);
+    composer.setPixelRatio(1);
+    composer.setSize(renderW, renderH);
+    bloomPass.setSize(renderW, renderH);
+    camera.aspect = outputAspect;
+    camera.updateProjectionMatrix();
+  }
+  const savedTime = ledMat.uniforms.uTime.value;
+  const savedTimeB = ledMatB.uniforms.uTime.value;
+  const savedSpinA = lensMesh ? lensMesh.rotation.z : 0;
+  const savedSpinB = lensMeshB ? lensMeshB.rotation.z : 0;
+  // Remember live camera pose so we can restore it after a sequence render (so the
+  // on-screen view doesn't jump to the last sequence pose when the export finishes).
+  const savedCamPose = {
+    px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+    tx: controls.target.x, ty: controls.target.y, tz: controls.target.z,
+    zoom: camera.zoom,
+  };
+  // Reset motion phases so offline render sways around the user's current vantage
+  orbitHomeAzimuth = null; orbitPhase = 0;
+  zoomBaseDist = null; zoomPhase = 0;
+  panPhase = 0; updateCameraMotion._lastPanDy = 0;
+  // In sequence mode, updateCameraMotion is bypassed — pose is driven by evaluateSequenceAt.
+  if (useSequence) { sequenceRenderActive = true; stopSequencePreview(); }
+
+  // Loop mode: respect the user's dialled-in speeds. We only sync the elevation
+  // frequency to the azimuth frequency (via loopCameraMode) so the vertical bob
+  // doesn't desync. For a seamless loop the user should pick speeds so that
+  // speed × duration is ~integer; we surface the cycle counts so they can tune.
+  const savedOrbitSpeed = state.orbitSpeed;
+  const savedZoomSpeed  = state.zoomSpeed;
+  const savedPanSpeed   = state.panSpeed;
+  const savedLensSpin   = state.lensSpin;
+  if (state.recLoop) {
+    loopCameraMode = true;
+    const cycles = {
+      orbit: state.autoOrbit ? (state.orbitSpeed * duration).toFixed(2) : null,
+      zoom:  state.autoZoom  ? (state.zoomSpeed  * duration).toFixed(2) : null,
+      pan:   state.autoPan   ? (state.panSpeed   * duration).toFixed(2) : null,
+      spin:  state.lensSpin  ? ((state.lensSpin * duration) / 360).toFixed(2) : null,
+    };
+    const parts = Object.entries(cycles).filter(([,v]) => v !== null).map(([k,v]) => `${k} ${v}`);
+    if (parts.length) console.info('[loop cycles per clip — tune speed/duration so each is close to an integer for a seamless loop]', parts.join(' · '));
+  }
+
+  const startMs = performance.now();
+  offlineAbortRequested = false;
+  setStatus(`rendering 0 / ${totalFrames}…`);
+
+  for (let i = 0; i < totalFrames; i++) {
+    if (offlineAbortRequested) break;
+    const t = i / fps;
+    ledMat.uniforms.uTime.value  = t;
+    ledMatB.uniforms.uTime.value = t;
+    if (useSequence) {
+      const pose = evaluateSequenceAt(t);
+      if (pose) applyPose(pose);
+    } else {
+      updateCameraMotion(1 / fps);
+    }
+    camera.updateMatrixWorld(true);
+    renderFrame();
+    let src;
+    if (useOffscreen) { drawRecFrame(); src = recCanvas; } else { src = renderer.domElement; }
+    let frame;
+    try {
+      frame = new VideoFrame(src, { timestamp: Math.round(t * 1_000_000) });
+    } catch (e) { setStatus('VideoFrame failed: ' + e.message); break; }
+    const keyFrame = (i % fps) === 0;
+    try {
+      encoder.encode(frame, { keyFrame });
+    } catch (e) {
+      encodeError = e;
+      try { frame.close(); } catch (_) {}
+      break;
+    }
+    frame.close();
+
+    // Backpressure: wait for the encoder queue to drain below a safe threshold
+    // before queueing more frames. This prevents GPU/encoder buildup at heavy SSAA.
+    const queueLimit = Math.max(4, Math.min(fps, 12));
+    let waitGuard = 0;
+    while (encoder.encodeQueueSize > queueLimit && encoder.state !== 'closed' && !encodeError && !offlineAbortRequested && waitGuard < 1000) {
+      await new Promise(r => setTimeout(r, 8));
+      waitGuard++;
+    }
+    if (offlineAbortRequested) break;
+
+    if (i % 3 === 0 || i === totalFrames - 1) {
+      const pct = ((i + 1) / totalFrames * 100).toFixed(0);
+      const elapsed = (performance.now() - startMs) / 1000;
+      const eta = elapsed / (i + 1) * (totalFrames - i - 1);
+      setStatus(`rendering ${i + 1}/${totalFrames} · ${pct}% · eta ${eta.toFixed(0)}s${state.recLoop ? ' · loop' : ''}`);
+      updateRenderOverlay({ frame: i + 1, totalFrames, elapsedMs: performance.now() - startMs, W, H, fps });
+      await new Promise(r => setTimeout(r, 0));
+    }
+    if (encodeError) break;
+  }
+
+  // Only flush + finalize if encoder is still alive; a codec error above closes it.
+  // On abort, skip flush+finalize — we discard the partial output.
+  const encoderOk = encoder.state !== 'closed' && !encodeError && !offlineAbortRequested;
+  if (encoderOk) {
+    try { await encoder.flush(); } catch (e) { encodeError = e; console.error(e); }
+  }
+  try { if (encoder.state !== 'closed') encoder.close(); } catch (e) { /* already closed */ }
+  if (!encodeError && !offlineAbortRequested) {
+    try { muxer.finalize(); } catch (e) { encodeError = e; console.error(e); }
+  }
+
+  // Restore realtime state
+  ledMat.uniforms.uTime.value  = savedTime;
+  ledMatB.uniforms.uTime.value = savedTimeB;
+  if (lensMesh)  lensMesh.rotation.z  = savedSpinA;
+  if (lensMeshB) lensMeshB.rotation.z = savedSpinB;
+  state.orbitSpeed = savedOrbitSpeed;
+  state.zoomSpeed  = savedZoomSpeed;
+  state.panSpeed   = savedPanSpeed;
+  state.lensSpin   = savedLensSpin;
+  orbitHomeAzimuth = null; zoomBaseDist = null;
+  recUsesOffscreen = false;
+  offlineInProgress = false;
+  loopCameraMode = false;
+  // If this was a sequence render, restore the live camera pose so the on-screen
+  // view doesn't jump to wherever the last sequence frame landed.
+  if (sequenceRenderActive) {
+    sequenceRenderActive = false;
+    camera.position.set(savedCamPose.px, savedCamPose.py, savedCamPose.pz);
+    controls.target.set(savedCamPose.tx, savedCamPose.ty, savedCamPose.tz);
+    camera.zoom = savedCamPose.zoom;
+    camera.updateProjectionMatrix();
+    controls.update();
+  }
+  // Restore renderer/composer/camera to live viewport
+  renderer.setPixelRatio(savedPixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.transmissionResolutionScale = savedTransmissionScale;
+  ledMat.uniforms.uPanelSmooth.value = savedPanelSmooth;
+  ledMatB.uniforms.uPanelSmooth.value = savedPanelSmooth;
+  composer.setPixelRatio(savedPixelRatio);
+  composer.setSize(window.innerWidth, window.innerHeight);
+  bloomPass.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+
+  if (offlineAbortRequested) {
+    offlineAbortRequested = false;
+    if (autoPausedForRender) { animPaused = false; clock.getDelta(); autoPausedForRender = false; guiRefresh(); }
+    hideRenderOverlay();
+    setStatus('render stopped');
+    return;
+  }
+  if (encodeError) {
+    if (autoPausedForRender) { animPaused = false; clock.getDelta(); autoPausedForRender = false; guiRefresh(); }
+    hideRenderOverlay();
+    setStatus('offline render failed — see console');
+    return;
+  }
+
+  const buffer = muxer.target.buffer;
+  const blob = new Blob([buffer], { type: 'video/mp4' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const tag = state.recAspect.replace(/\s+/g, '_').replace(/:/g, 'x');
+  a.download = `prismatica_offline_${tag}_${W}x${H}_${fps}fps_${Date.now()}.mp4`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  // Resume live animation BEFORE the final status message so the save message isn't overwritten.
+  if (autoPausedForRender) { animPaused = false; clock.getDelta(); autoPausedForRender = false; guiRefresh(); }
+  hideRenderOverlay();
+  const smoothTag = ssaa > 1 ? ` · SSAA ${ssaa}×` : '';
+  const maxTag = maxQ ? ' · max-Q' : '';
+  const mbps = (targetBitrate / 1_000_000).toFixed(0);
+  setStatus(`offline render saved · ${W}×${H} · ${duration}s @ ${fps}fps${smoothTag}${maxTag} · ${mbps} Mbps · ${(blob.size / 1048576).toFixed(1)} MB`);
+}
+
+function animate() {
+  if (offlineInProgress) {
+    // Throttle to ~5Hz during offline render — live loop has nothing to do.
+    fpsEl.textContent = 'rendering';
+    setTimeout(() => requestAnimationFrame(animate), 200);
+    return;
+  }
+  if (animPaused) {
+    // Keep the loop alive at a low cadence so resume is instant, but skip all
+    // shader/motion/render work so the GPU + CPU stay quiet.
+    fpsEl.textContent = 'paused';
+    setTimeout(() => requestAnimationFrame(animate), 200);
+    return;
+  }
+  const dt = clock.getDelta();
+  ledMat.uniforms.uTime.value  += dt;
+  ledMatB.uniforms.uTime.value += dt;
+  // Sequence preview: drive the camera through the storyboard in real time.
+  if (sequencePlaying) {
+    const elapsed = (performance.now() - sequenceStartMs) / 1000;
+    const total = sequenceTotalDuration();
+    if (elapsed >= total) {
+      // Park on the final shot, then stop preview.
+      const last = shotSequence[shotSequence.length - 1];
+      if (last) applyPose(last.pose);
+      sequencePlaying = false;
+      setStatus('sequence preview complete');
+    } else {
+      const pose = evaluateSequenceAt(elapsed);
+      if (pose) applyPose(pose);
+    }
+  }
+  updateCameraMotion(dt);
+  controls.update();
+  renderFrame();
+  if (recUsesOffscreen && mediaRecorder && mediaRecorder.state === 'recording') drawRecFrame();
+  fpsFrames++;
+  const now = performance.now();
+  if (now - fpsLast > 500) {
+    const fps = (fpsFrames * 1000) / (now - fpsLast);
+    fpsEl.textContent = `${fps.toFixed(0)} fps`;
+    fpsFrames = 0; fpsLast = now;
+  }
+  requestAnimationFrame(animate);
+}
+animate();
+
+// -------------------------------------------------------------------------
+// Keyboard shortcuts  (H hide UI · F fullscreen · R record · Space auto-orbit
+// · B toggle bloom · 1-9 load numeric preset · Esc stop recording)
+// -------------------------------------------------------------------------
+let uiHidden = false;
+function setUIHidden(hide) {
+  uiHidden = hide;
+  gui.domElement.style.display = hide ? 'none' : '';
+  document.getElementById('hud').style.display = hide ? 'none' : '';
+  statusEl.style.display = hide ? 'none' : '';
+  fpsEl.style.display = hide ? 'none' : '';
+  aspectOverlay.style.visibility = hide ? 'hidden' : '';
+}
+window.addEventListener('keydown', (e) => {
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  // Shift+1..9 jumps to shot N in the sequence (no transition, pure snap).
+  // Checked BEFORE the meta/ctrl/alt guard so shift-combos work, and BEFORE the
+  // digit-only preset check so it wins over preset loading.
+  if (e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && /^Digit[1-9]$/.test(e.code)) {
+    const n = parseInt(e.code.slice(5));
+    if (n <= shotSequence.length) { loadShotPose(n - 1); e.preventDefault(); return; }
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key;
+  if (k === 'h' || k === 'H') { setUIHidden(!uiHidden); e.preventDefault(); }
+  else if (k === 'f' || k === 'F') {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen?.();
+    e.preventDefault();
+  }
+  else if (k === 'r' || k === 'R') { toggleRecording(); e.preventDefault(); }
+  else if (k === 'p' || k === 'P') { setAnimPaused(!animPaused); e.preventDefault(); }
+  else if (k === 'e' || k === 'E') { toggleEcoMode(); e.preventDefault(); }
+  else if (k === 'n' || k === 'N') { addShotToSequence(); e.preventDefault(); }
+  else if (k === 'Enter') {
+    if (sequencePlaying) stopSequencePreview();
+    else playSequencePreview();
+    e.preventDefault();
+  }
+  else if (k === 'b' || k === 'B') {
+    state.bloomEnabled = !state.bloomEnabled;
+    syncBloom(); guiRefresh();
+    setStatus(`bloom ${state.bloomEnabled ? 'on' : 'off'}`);
+    e.preventDefault();
+  }
+  else if (k === ' ') {
+    state.autoOrbit = !state.autoOrbit;
+    orbitHomeAzimuth = null;
+    guiRefresh();
+    setStatus(`auto orbit ${state.autoOrbit ? 'on' : 'off'}`);
+    e.preventDefault();
+  }
+  else if (k === 'Escape') {
+    if (offlineInProgress) { abortOfflineRender(); e.preventDefault(); }
+    else if (sequencePlaying) { stopSequencePreview(); e.preventDefault(); }
+    else if (mediaRecorder && mediaRecorder.state === 'recording') { stopRecording(); e.preventDefault(); }
+  }
+  else if (/^[0-9]$/.test(k)) {
+    const p = loadPresets()[k];
+    if (p) { applyPreset(p); state.currentPreset = k; refreshPresetDropdown(); guiRefresh(); setStatus(`loaded preset "${k}"`); }
+  }
+});
+
+window.__prismatica = {
+  state, rebuildLenses, scene, camera, renderer, controls,
+  ledMat, ledMatB, lensMaterial, lensMaterialB, LENS_TYPES,
+  addShotToSequence, removeShotFromSequence, replaceShotInSequence,
+  loadShotPose, clearShotSequence, moveShotInSequence,
+  playSequencePreview, stopSequencePreview,
+  evaluateSequenceAt, sequenceTotalDuration,
+  shotSequence: () => shotSequence,
+};
+</script>
+</body>
+</html>
