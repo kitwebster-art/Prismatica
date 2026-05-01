@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Prismatica V2 — Lens Playground</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
 <style>
   html, body { margin:0; padding:0; height:100%; background:#000; color:#eee; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; overflow:hidden; }
   #app { position: fixed; inset: 0; }
@@ -14,6 +15,40 @@
   }
   #hud b { font-weight: 600; letter-spacing: 0.12em; }
   #hud span { color: #888; }
+
+  /* --- Floating eco-mode toggle in the top-left of the canvas --------------- */
+  /* Persistent, always one click away — no scrolling the GUI panel to find it. */
+  #ecoBtn {
+    position: fixed; top: 44px; left: 14px; z-index: 11;
+    padding: 8px 14px; border-radius: 999px; cursor: pointer; user-select: none;
+    background: rgba(28, 28, 28, 0.85); color: #aaa; border: 1px solid #333;
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+  #ecoBtn:hover { color: #fff; border-color: #555; }
+  #ecoBtn.on { background: #2bd672; color: #052e15; border-color: #2bd672; font-weight: 600; }
+  body.render-mode #ecoBtn { display: none; }
+
+  /* --- Dimension overlay (fabrication-focused) ----------------------------- */
+  /* Live readout of the current lens spec — useful when liaising with the
+     manufacturer or sense-checking a tweak. Toggled from Actions folder. */
+  #dimPanel {
+    position: fixed; bottom: 12px; right: 320px; z-index: 10;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 10px;
+    color: #aaa; background: rgba(20, 20, 20, 0.85);
+    border: 1px solid #2a2a2a; border-radius: 6px;
+    padding: 10px 14px; letter-spacing: 0.04em;
+    min-width: 220px; pointer-events: none;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    display: none;
+  }
+  #dimPanel.on { display: block; }
+  #dimPanel .heading { color: #555; font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 8px; }
+  #dimPanel .row { display: flex; justify-content: space-between; gap: 18px; line-height: 1.6; }
+  #dimPanel .row span:last-child { color: #fff; font-variant-numeric: tabular-nums; }
+  body.render-mode #dimPanel { display: none !important; }
   #status {
     position: fixed; bottom: 12px; left: 80px; z-index: 10;
     font-size: 11px; color: #888; font-family: "SF Mono", ui-monospace, Menlo, monospace;
@@ -28,6 +63,14 @@
   .lil-gui { --background-color: #111; --widget-color: #1e1e1e; --focus-color: #333; --hover-color: #2a2a2a; --number-color: #f0a; --string-color: #0af; font-size: 11px; }
   .lil-gui.root { --width: 300px; }
   .lil-gui .title { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+  /* Active state for toggle-style action buttons (eco mode, pause, record, sequence preview).
+     For function-type controllers, lil-gui puts the .name div INSIDE the <button>, so the
+     button's background and the label's colour need to contrast directly. */
+  .lil-gui .controller.btn-active button { background: #2bd672 !important; box-shadow: inset 0 0 0 1px rgba(43, 214, 114, 0.7); }
+  .lil-gui .controller.btn-active button .name { color: #052e15 !important; font-weight: 600; }
+  /* Recording uses red instead of green so it's unambiguous at a glance. */
+  .lil-gui .controller.btn-active.btn-rec button { background: #ff5050 !important; box-shadow: inset 0 0 0 1px rgba(255, 80, 80, 0.7); }
+  .lil-gui .controller.btn-active.btn-rec button .name { color: #2a0000 !important; }
   .fi { position: absolute; left: -9999px; }
 
   /* --- render mode overlay ------------------------------------------------ */
@@ -82,6 +125,16 @@
 <body>
 <div id="app"></div>
 <div id="hud"><b>Prismatica V2</b> <span>— lens playground</span></div>
+<div id="ecoBtn" title="Toggle eco mode (E) — drops live-view quality so the laptop stays cool. Renders still export at full quality.">⚡ eco</div>
+<div id="dimPanel">
+  <div class="heading">Dimensions</div>
+  <div class="row"><span>footprint</span><span id="dimFoot">—</span></div>
+  <div class="row"><span>base thickness</span><span id="dimBase">—</span></div>
+  <div class="row"><span>peak height</span><span id="dimPeak">—</span></div>
+  <div class="row"><span>total height</span><span id="dimTotal">—</span></div>
+  <div class="row"><span>narrowest</span><span id="dimNarrow">—</span></div>
+  <div class="row"><span>est. mass (PMMA)</span><span id="dimMass">—</span></div>
+</div>
 <div id="status">loading…</div>
 
 <div id="renderOverlay">
@@ -99,6 +152,7 @@
 <input type="file" id="fileVideo" class="fi" accept="video/*" />
 <input type="file" id="fileImport" class="fi" accept="application/json" />
 <input type="file" id="fileLogo"  class="fi" accept="image/*,.svg" />
+<input type="file" id="fileLut"   class="fi" accept=".cube,.CUBE" />
 
 <script type="importmap">
 {
@@ -119,6 +173,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import GUI from 'lil-gui';
 
 const statusEl = document.getElementById('status');
@@ -161,14 +216,18 @@ scene.background = new THREE.Color(0x050505);
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 1, 5000);
+// Near plane dropped to 0.1 so geometry doesn't clip when zoomed in for macros.
+const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 8000);
 camera.position.set(0, 220, 900);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.target.set(0, 0, 0);
-controls.minDistance = 200;
-controls.maxDistance = 3000;
+// minDistance was 200; dropped to 10 so the camera can push right up to the lens
+// surface for macro shots through individual ripples. maxDistance bumped so wide
+// overview shots have headroom too.
+controls.minDistance = 10;
+controls.maxDistance = 6000;
 
 // While the user drags the camera, auto orbit/zoom/pan step aside so the
 // mouse wins. On release, the motion recenters on wherever the camera ended up.
@@ -214,9 +273,116 @@ const bloomPass = new UnrealBloomPass(
 );
 bloomPass.enabled = false;
 composer.addPass(bloomPass);
+
+// --- Look Grade post-processing pass ---------------------------------------
+// Applied to the final composited image (lens + panel + bloom). Adds creative
+// finishing controls without affecting the underlying scene: saturation,
+// contrast, vignette, film grain. All defaults are neutral (1, 1, 0, 0) so the
+// pass is a no-op until the user dials anything in.
+const lookGradeShader = {
+  uniforms: {
+    tDiffuse:    { value: null },
+    uSaturation: { value: 1.0 },
+    uContrast:   { value: 1.0 },
+    uVignette:   { value: 0.0 },
+    uGrain:      { value: 0.0 },
+    uSharpen:    { value: 0.0 },
+    uResolution: { value: new THREE.Vector2(1, 1) },
+    uTime:       { value: 0.0 },
+    tLut:        { value: null },
+    uLutSize:    { value: 0.0 },   // 0 = no LUT loaded
+    uLutMix:     { value: 1.0 },   // 0..1 strength of LUT vs original
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+  `,
+  fragmentShader: `
+    precision highp float;
+    varying vec2 vUv;
+    uniform sampler2D tDiffuse;
+    uniform float uSaturation;
+    uniform float uContrast;
+    uniform float uVignette;
+    uniform float uGrain;
+    uniform float uSharpen;
+    uniform vec2  uResolution;
+    uniform float uTime;
+    uniform sampler2D tLut;
+    uniform float uLutSize;
+    uniform float uLutMix;
+
+    // Sample a 3D LUT packed into a 2D strip texture of size (N*N) × N.
+    // Bilinear filtering on the texture handles R+G axes; we manually blend
+    // along B for trilinear interpolation. uLutSize=0 short-circuits so the
+    // pass is a no-op when no LUT is loaded.
+    vec3 lookupLut(vec3 c) {
+      float N = uLutSize;
+      vec3 cc = clamp(c, vec3(0.0), vec3(1.0));
+      float r = cc.r * (N - 1.0);
+      float g = cc.g * (N - 1.0);
+      float b = cc.b * (N - 1.0);
+      float b0 = floor(b);
+      float b1 = min(b0 + 1.0, N - 1.0);
+      float bFrac = b - b0;
+      float u0 = (b0 * N + r + 0.5) / (N * N);
+      float u1 = (b1 * N + r + 0.5) / (N * N);
+      float v  = (g + 0.5) / N;
+      vec3 col0 = texture2D(tLut, vec2(u0, v)).rgb;
+      vec3 col1 = texture2D(tLut, vec2(u1, v)).rgb;
+      return mix(col0, col1, bFrac);
+    }
+
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+
+      // Sharpen — Laplacian convolution. Skipped when uSharpen == 0 to avoid
+      // the four extra texture taps. Strength 0..1 maps to a strong unsharp.
+      if (uSharpen > 0.0) {
+        vec2 px = 1.0 / uResolution;
+        vec3 cN = texture2D(tDiffuse, vUv + vec2(0.0, px.y)).rgb;
+        vec3 cS = texture2D(tDiffuse, vUv - vec2(0.0, px.y)).rgb;
+        vec3 cE = texture2D(tDiffuse, vUv + vec2(px.x, 0.0)).rgb;
+        vec3 cW = texture2D(tDiffuse, vUv - vec2(px.x, 0.0)).rgb;
+        vec3 lap = c.rgb * 4.0 - cN - cS - cE - cW;
+        c.rgb += lap * uSharpen;
+      }
+
+      // Saturation around perceptual luminance.
+      float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+      c.rgb = mix(vec3(l), c.rgb, uSaturation);
+      // Contrast pivots around 0.5 (midpoint).
+      c.rgb = (c.rgb - 0.5) * uContrast + 0.5;
+
+      // LUT — apply colour grade lookup if a CUBE file is loaded.
+      if (uLutSize > 1.5) {
+        vec3 graded = lookupLut(c.rgb);
+        c.rgb = mix(c.rgb, graded, uLutMix);
+      }
+
+      // Vignette: smooth radial darkening from centre. uVignette=0 = no fade.
+      float r = length(vUv - 0.5);
+      float vig = 1.0 - smoothstep(0.35, 0.85, r) * uVignette;
+      c.rgb *= vig;
+      // Film grain: temporal noise modulated by uGrain. Stays subtle even at 1.
+      if (uGrain > 0.0) {
+        float n = fract(sin(dot(vUv * (1.0 + fract(uTime)), vec2(12.9898, 78.233))) * 43758.5453);
+        c.rgb += (n - 0.5) * uGrain * 0.12;
+      }
+      gl_FragColor = c;
+    }
+  `,
+};
+const lookPass = new ShaderPass(lookGradeShader);
+composer.addPass(lookPass);
+
 composer.addPass(new OutputPass());
 
-function renderFrame() { composer.render(); }
+function renderFrame() {
+  // Tick the grain time so the noise field shifts each frame.
+  lookPass.uniforms.uTime.value = performance.now() * 0.001;
+  composer.render();
+}
 
 const key = new THREE.DirectionalLight(0xffffff, 1.1);
 key.position.set(400, 600, 800);
@@ -241,6 +407,9 @@ const ledShader = {
     uHueShift:   { value: 0.0 },
     uTex:        panelTexture,
     uHasTex:     hasTexture,
+    uPgLineWidth:{ value: 0.06 },  // pixelgrid: gridline thickness as fraction of cell pitch
+    uPgFlow:     { value: 0.4 },   // pixelgrid: drift speed in cells per second (real time)
+    uPanelMirror:{ value: 0 },     // 1 = fold uv into the top-right quadrant for H+V symmetry
     uSqThickness:{ value: 0.5 },
     uSqSoftness: { value: 0.3 },
     uSqMono:     { value: 0 },
@@ -274,6 +443,9 @@ const ledShader = {
     uniform float uSpeed;
     uniform float uBrightness;
     uniform float uHueShift;
+    uniform float uPgLineWidth;
+    uniform float uPgFlow;
+    uniform int   uPanelMirror;
     uniform sampler2D uTex;
     uniform int uHasTex;
     uniform float uSqThickness;
@@ -297,7 +469,43 @@ const ledShader = {
     }
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7)))*43758.5453); }
 
+    // Smooth value noise — interpolates between hashed cell corners with a
+    // smoothstep curve. Cheap, no derivatives, plenty good for fluid panels.
+    float vnoise(vec2 p) {
+      vec2 ip = floor(p);
+      vec2 fp = fract(p);
+      vec2 u = fp * fp * (3.0 - 2.0 * fp);
+      float a = hash(ip);
+      float b = hash(ip + vec2(1.0, 0.0));
+      float c = hash(ip + vec2(0.0, 1.0));
+      float d = hash(ip + vec2(1.0, 1.0));
+      return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    }
+    // Fractal Brownian Motion — sums octaves of value noise at decreasing
+    // amplitude. This gives the rich high-detail texture for liquid shaders.
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float amp = 0.5;
+      for (int i = 0; i < 5; i++) {
+        v += amp * vnoise(p);
+        p *= 2.0;
+        amp *= 0.5;
+      }
+      return v;
+    }
+    // Inigo Quilez cosine palette — produces smooth iridescent gradients
+    // controlled by 4 vec3s (DC, amp, freq, phase). Great for fluid colour.
+    vec3 iqPalette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+      return a + b * cos(6.2831853 * (c * t + d));
+    }
+
     vec3 computeLedColor(vec2 uv, float t) {
+      // H+V mirror: fold the uv into the top-right quadrant of the panel so the
+      // four quadrants mirror each other. Cheapest and most general way to
+      // symmetrise every panel mode at once — no per-mode patches needed.
+      if (uPanelMirror == 1) {
+        uv = vec2(0.5) + abs(uv - vec2(0.5));
+      }
       vec2 px = floor(uv * uScale);
       vec2 puv = (px + 0.5) / uScale;
       vec3 col = vec3(0.0);
@@ -307,19 +515,30 @@ const ledShader = {
         float h = c * 0.5 + uHueShift + t * 0.1;
         col = hsv2rgb(vec3(fract(h), 0.85, 0.9));
       } else if (uMode == 1) {
-        float h = (px.x / uScale) + (px.y / uScale) * 0.5 + uHueShift + t * 0.2;
-        col = hsv2rgb(vec3(fract(h), 0.9, 1.0));
+        // Crisp black-and-white pixel grid. Bright square cells separated by thin
+        // black gridlines. uScale controls cell density. uPgLineWidth controls the
+        // thickness of the black lines (fraction of cell). uPgFlow drifts the grid
+        // diagonally in cells/sec of real time — gentle motion when filming.
+        vec2 drift = vec2(uTime, uTime * 0.7) * uPgFlow;
+        vec2 cell = uv * uScale + drift;
+        vec2 f = abs(fract(cell) - 0.5);
+        float edge = max(f.x, f.y);
+        float aa = fwidth(edge);
+        float lw = clamp(uPgLineWidth, 0.0, 0.49);
+        float pixel = 1.0 - smoothstep(0.5 - lw - aa, 0.5 - lw + aa, edge);
+        col = vec3(pixel);
       } else if (uMode == 2) {
-        float v = 0.5 + 0.5 * sin(puv.x * 12.0 + t * 2.0) * cos(puv.y * 8.0 - t * 1.3);
+        // Continuous wave — sample uv directly so it stays smooth at deep zoom.
+        float v = 0.5 + 0.5 * sin(uv.x * 12.0 + t * 2.0) * cos(uv.y * 8.0 - t * 1.3);
         col = hsv2rgb(vec3(fract(v + uHueShift), 0.85, v));
       } else if (uMode == 3) {
-        vec2 c = puv - 0.5;
+        vec2 c = uv - 0.5;
         float r = length(c);
         float ringFreq = uScale * 0.6;
         float v = 0.5 + 0.5 * sin(r * ringFreq - t * 3.0);
         col = hsv2rgb(vec3(fract(r * 2.0 + uHueShift + t * 0.05), 0.85, v));
       } else if (uMode == 4) {
-        float v = 0.5 + 0.5 * sin(puv.y * 40.0 + t * 6.0);
+        float v = 0.5 + 0.5 * sin(uv.y * 40.0 + t * 6.0);
         col = vec3(v, v * 0.6, v * 0.3);
       } else if (uMode == 5) {
         vec2 q = px + floor(t * 6.0);
@@ -342,17 +561,22 @@ const ledShader = {
         vec3 tint = hsv2rgb(vec3(fract(h * 2.0 + uHueShift), 0.5, 1.0));
         col = brightness * mix(vec3(1.0), tint, 0.5);
       } else if (uMode == 10) {
-        vec2 c = puv - 0.5;
+        // SPIRAL — galactic arms with hard, narrow ridges. Sharper than the old
+        // soft-falloff version: uses fwidth-AA on a tight smoothstep band so the
+        // arms read as crisp lines, not glowing smears.
+        vec2 c = uv - 0.5;
         float r = length(c);
         float a = atan(c.y, c.x);
         float arms = 3.0;
         float spiral = sin(a * arms + log(r + 0.01) * 9.0 - t * 1.8);
-        float arm = smoothstep(-0.1, 0.8, spiral) * exp(-r * 2.4);
-        float core = exp(-r * 16.0) * 1.6;
+        float aa = fwidth(spiral) * 1.5;
+        // Narrow band + hard edges: arm is "lit" only at sin near 1.
+        float arm = smoothstep(0.55 - aa, 0.55 + aa, spiral) * smoothstep(0.65, 0.0, r);
+        float core = smoothstep(0.05, 0.0, r) * 1.4;
         float hue = fract(0.62 + r * 0.6 + uHueShift);
-        col = hsv2rgb(vec3(hue, 0.75, arm)) + vec3(1.0, 0.85, 0.6) * core;
+        col = hsv2rgb(vec3(hue, 0.85, arm)) + vec3(1.0, 0.85, 0.6) * core;
       } else if (uMode == 11) {
-        vec2 c = puv - 0.5;
+        vec2 c = uv - 0.5;
         float r = length(c);
         float freq = uScale * 1.2;
         float rings = sin(r * freq - t * 4.0);
@@ -360,12 +584,16 @@ const ledShader = {
         float hue = fract(r * 4.0 + t * 0.12 + uHueShift);
         col = hsv2rgb(vec3(hue, 0.9, v));
       } else if (uMode == 12) {
-        vec2 c = puv - 0.5;
+        // RAYS — hard-edged spokes radiating from centre. Replaced the old
+        // pow(ray, 3) gradient with an antialiased smoothstep band so each ray
+        // reads as a crisp wedge with a clean dark gap between spokes.
+        vec2 c = uv - 0.5;
         float a = atan(c.y, c.x);
         float r = length(c);
         float spokes = 12.0;
         float ray = 0.5 + 0.5 * cos(a * spokes - t * 1.0);
-        float v = pow(ray, 3.0) * smoothstep(0.55, 0.0, r) * (0.6 + 0.4 * sin(t * 2.0 + r * 20.0));
+        float aa = fwidth(ray) * 1.5;
+        float v = smoothstep(0.55 - aa, 0.55 + aa, ray) * smoothstep(0.55, 0.0, r);
         col = hsv2rgb(vec3(fract(a / 6.2832 + t * 0.1 + uHueShift), 0.85, v));
       } else if (uMode == 13) {
         vec2 c = abs(uv - 0.5);
@@ -421,6 +649,155 @@ const ledShader = {
           h = fract(h + uHueShift);
           col = hsv2rgb(vec3(h, s, v));
         }
+      } else if (uMode == 14) {
+        // LIQUID IRIDESCENCE — domain-warped FBM with iridescent palette,
+        // tuned for high contrast through the acrylic. Now has proper black
+        // areas (where the FBM dips low) so the lens has dark zones to refract
+        // against, instead of one uniform pastel wash.
+        vec2 q = uv * 2.0 - 1.0;
+        float tt = t * 0.18;
+        vec2 w1 = vec2(fbm(q + vec2(0.0, 0.0) + tt), fbm(q + vec2(5.2, 1.3) + tt));
+        vec2 w2 = vec2(fbm(q + 4.0 * w1 + vec2(1.7, 9.2) + tt * 0.7),
+                       fbm(q + 4.0 * w1 + vec2(8.3, 2.8) + tt * 0.7));
+        float v = fbm(q + 4.0 * w2);
+        // Iridescent palette: cycles through the full spectrum
+        vec3 a = vec3(0.5, 0.5, 0.5);
+        vec3 b = vec3(0.5, 0.5, 0.5);
+        vec3 c = vec3(1.0, 1.0, 1.0);
+        vec3 d = vec3(0.0, 0.33, 0.67);
+        vec3 hue = iqPalette(v + uHueShift + t * 0.02, a, b, c, d);
+        // Contrast curve: dark FBM zones go to true black, mid zones still
+        // saturate. Pow(2.2) deepens shadows; smoothstep clamps below 0.2.
+        float mask = smoothstep(0.18, 0.85, v);
+        col = hue * pow(mask, 1.4);
+      } else if (uMode == 15) {
+        // PLASMA AURORA — flowing curtains of multi-frequency colour.
+        // Soft vertical drift, slow phase shift, rich reds-purples-cyans.
+        vec2 q = uv * 2.0 - 1.0;
+        float band = sin(q.x * 4.0 + sin(q.y * 2.5 + t * 0.22) * 1.5 + t * 0.13);
+        band += sin(q.x * 7.0 - q.y * 3.0 + t * 0.18) * 0.5;
+        band += sin(length(q) * 6.0 - t * 0.15) * 0.3;
+        band = band * 0.5 + 0.5;
+        float intensity = pow(band, 1.4);
+        // Aurora palette: deep violets / magentas / cyans
+        vec3 a = vec3(0.45, 0.30, 0.55);
+        vec3 b = vec3(0.55, 0.50, 0.45);
+        vec3 c = vec3(1.0, 1.1, 0.9);
+        vec3 d = vec3(0.10, 0.20, 0.30);
+        col = iqPalette(intensity + uHueShift + t * 0.04, a, b, c, d) * intensity;
+      } else if (uMode == 16) {
+        // BUBBLE FLOW — animated voronoi cellular noise, now with proper black
+        // gaps between bubbles. The lens loves contrasty input — bright bubbles
+        // against pure black gives the most dramatic refraction.
+        vec2 q = uv * 4.0;
+        vec2 ip = floor(q);
+        vec2 fp = fract(q);
+        float minD1 = 8.0;
+        float minD2 = 8.0;
+        for (int j = -1; j <= 1; j++) {
+          for (int i = -1; i <= 1; i++) {
+            vec2 cell = ip + vec2(float(i), float(j));
+            vec2 offset = vec2(hash(cell), hash(cell + 17.0));
+            offset = 0.5 + 0.45 * sin(t * 0.25 + 6.2832 * offset);
+            float dist = length(vec2(float(i), float(j)) + offset - fp);
+            if (dist < minD1) { minD2 = minD1; minD1 = dist; }
+            else if (dist < minD2) { minD2 = dist; }
+          }
+        }
+        // Bubble core mask: bright at the centre, hard transition to black
+        // between bubbles via smoothstep on the inverted minD1 distance.
+        float core = smoothstep(0.55, 0.05, minD1);          // inside the bubble
+        float seam = smoothstep(0.0, 0.04, minD2 - minD1);   // bright edge along seam
+        vec3 a = vec3(0.5, 0.4, 0.6);
+        vec3 b = vec3(0.5, 0.5, 0.5);
+        vec3 c = vec3(1.0, 1.0, 1.0);
+        vec3 d = vec3(0.30, 0.50, 0.80);
+        vec3 fill = iqPalette(minD1 * 1.5 + uHueShift + t * 0.03, a, b, c, d);
+        col = fill * core * seam;
+      } else if (uMode == 17) {
+        // LIQUID MERCURY — three-layer FBM stacked at different scales, now
+        // with true black areas. The previous version had a 0.4 ambient floor
+        // that made the whole panel read as flat-white through the lens. Now
+        // the dark FBM zones go to deep black and only the bright lobes glow.
+        vec2 q = uv * 1.5 - 0.75;
+        float n1 = fbm(q * 1.5 + vec2(t * 0.04, t * 0.025));
+        float n2 = fbm(q * 4.0 + vec2(-t * 0.03, t * 0.05) + n1 * 0.7);
+        float n3 = fbm(q * 9.0 + n2 * 1.5);
+        float v = n1 * 0.55 + n2 * 0.30 + n3 * 0.15;
+        // High-contrast curve: black up to v=0.35, ramp to bright by 0.85.
+        float lit = smoothstep(0.32, 0.85, v);
+        vec3 base = vec3(0.65, 0.72, 0.88) * lit * 1.5;
+        vec3 a = vec3(0.5, 0.5, 0.5);
+        vec3 b = vec3(0.5, 0.5, 0.5);
+        vec3 c = vec3(1.0, 0.9, 1.1);
+        vec3 d = vec3(0.0, 0.20, 0.50);
+        vec3 sheen = iqPalette(v * 1.5 + uHueShift + t * 0.025, a, b, c, d);
+        col = mix(base, base * sheen * 1.7, 0.6);
+      } else if (uMode == 18) {
+        // CAUSTICS — water-light through a rippling pool. Now pure-black between
+        // ridges (no 0.15 ambient floor), so the lens has clean dispersion zones
+        // and the caustic veins read like real light through water.
+        vec2 p = uv * 3.0;
+        float ts = t * 0.25;
+        vec2 q = vec2(fbm(p + vec2(0.0, ts)), fbm(p + vec2(5.2, -ts)));
+        vec2 r = vec2(fbm(p + 4.0 * q + vec2(1.7, 9.2) + ts * 0.5),
+                      fbm(p + 4.0 * q + vec2(8.3, 2.8) - ts * 0.5));
+        float f = fbm(p + 4.0 * r);
+        // Sharper ridges via a higher power. Ridge approaches 1 only near the
+        // peak of the FBM, otherwise quickly drops to 0 — gives clean dark gaps.
+        float ridge = pow(1.0 - abs(f - 0.5) * 2.0, 6.0);
+        vec3 a = vec3(0.5, 0.55, 0.6);
+        vec3 b = vec3(0.5, 0.45, 0.4);
+        vec3 c = vec3(1.0, 1.0, 0.9);
+        vec3 d = vec3(0.45, 0.20, 0.10);
+        vec3 base = iqPalette(f * 0.6 + uHueShift + ts * 0.05, a, b, c, d);
+        col = base * ridge * 1.8;
+      } else if (uMode == 19) {
+        // WARPED GRID — orthogonal grid lines bent gently by a slow domain-
+        // warping noise field. Lines stay razor-sharp; their positions flow.
+        // High contrast, very slow, "bulgy" silk-grid look. uPgLineWidth controls
+        // line thickness, uPgFlow / panel speed slider control drift rate.
+        vec2 q = uv * 2.0 - 1.0;
+        float ts = t * 0.06;  // slow base flow
+        float wx = fbm(q * 0.55 + vec2(ts, 0.0)) - 0.5;
+        float wy = fbm(q * 0.55 + vec2(0.0, ts + 5.2)) - 0.5;
+        vec2 warpedUv = uv + vec2(wx, wy) * 0.22;
+        vec2 cell = warpedUv * uScale + vec2(uTime * uPgFlow, uTime * uPgFlow * 0.7);
+        vec2 fc = abs(fract(cell) - 0.5);
+        float aaX = fwidth(fc.x);
+        float aaY = fwidth(fc.y);
+        float lw = clamp(uPgLineWidth * 1.5 + 0.02, 0.005, 0.49);
+        float lineX = 1.0 - smoothstep(0.5 - lw - aaX, 0.5 - lw + aaX, fc.x);
+        float lineY = 1.0 - smoothstep(0.5 - lw - aaY, 0.5 - lw + aaY, fc.y);
+        float v = max(lineX, lineY);
+        col = vec3(v);
+      } else if (uMode == 20) {
+        // WAVEFIELD GRID — orthogonal grid bent by a slow sinusoidal field.
+        // More periodic / undulating than the FBM-warped version, reads like
+        // graph paper on a flag in still air. Hard lines, slow ocean-roll motion.
+        float ts = t * 0.08;
+        float dispX = sin(uv.y * 4.0 + ts) * 0.06 + sin(uv.y * 11.0 - ts * 0.5) * 0.025;
+        float dispY = cos(uv.x * 5.5 - ts * 0.7) * 0.05 + cos(uv.x * 13.0 + ts * 0.4) * 0.020;
+        vec2 cell = (uv + vec2(dispX, dispY)) * uScale + vec2(uTime * uPgFlow * 0.5, 0.0);
+        vec2 fc = abs(fract(cell) - 0.5);
+        float aaX = fwidth(fc.x), aaY = fwidth(fc.y);
+        float lw = clamp(uPgLineWidth * 1.5 + 0.02, 0.005, 0.49);
+        float lineX = 1.0 - smoothstep(0.5 - lw - aaX, 0.5 - lw + aaX, fc.x);
+        float lineY = 1.0 - smoothstep(0.5 - lw - aaY, 0.5 - lw + aaY, fc.y);
+        col = vec3(max(lineX, lineY));
+      } else if (uMode == 21) {
+        // DIAMOND BANDS — concentric square (Chebyshev) rings rotating extremely
+        // slowly. Hard band edges via smoothstep on the derivative. The slow
+        // rotation makes the diamond shape sweep imperceptibly, very meditative.
+        vec2 c = (uv - 0.5) * 2.0;
+        float a = t * 0.025;  // ~1 full rotation every ~250s — barely perceptible
+        float ca = cos(a), sa = sin(a);
+        vec2 r = vec2(c.x * ca - c.y * sa, c.x * sa + c.y * ca);
+        float d = max(abs(r.x), abs(r.y));
+        float bands = sin(d * uScale * 1.2 - t * 0.4);
+        float aa = fwidth(bands);
+        float v = smoothstep(-aa, aa, bands);
+        col = vec3(v);
       }
       return col;
     }
@@ -453,13 +830,25 @@ const ledGeo = new THREE.PlaneGeometry(800, 800, 1, 1);
 const ledMat = new THREE.ShaderMaterial({ ...ledShader, depthWrite: true, side: THREE.FrontSide });
 const ledPanel = new THREE.Mesh(ledGeo, ledMat);
 ledPanel.position.z = -30;
+ledPanel.renderOrder = 1;
 scene.add(ledPanel);
 
 const ledMatB = new THREE.ShaderMaterial({ ...ledShader, depthWrite: true, side: THREE.FrontSide });
 const ledPanelB = new THREE.Mesh(new THREE.PlaneGeometry(800, 800, 1, 1), ledMatB);
 ledPanelB.position.z = -30;
 ledPanelB.visible = false;
+ledPanelB.renderOrder = 1;
 scene.add(ledPanelB);
+
+const casingMat = new THREE.MeshStandardMaterial({ color: 0x7a7a7a, metalness: 0.65, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
+const ledCasing = new THREE.Mesh(new THREE.BoxGeometry(800, 800, 30), casingMat);
+ledCasing.position.z = -30 - 15;
+scene.add(ledCasing);
+
+const ledCasingB = new THREE.Mesh(new THREE.BoxGeometry(800, 800, 30), casingMat);
+ledCasingB.position.z = -30 - 15;
+ledCasingB.visible = false;
+scene.add(ledCasingB);
 
 const backdrop = new THREE.Mesh(
   new THREE.PlaneGeometry(6000, 6000),
@@ -536,11 +925,59 @@ const LENS_TYPES = {
     label: 'Ripple Field',
     params: {
       wavelength: { value: 70, min: 20, max: 200, step: 1 },
-      amplitude:  { value: 8,  min: 0,  max: 100,  step: 0.5 },
+      amplitude:  { value: 8,  min: 0,  max: 100, step: 0.5 },
     },
-    fn: (p) => (x, y) => {
-      const r = Math.hypot(x, y);
-      return p.amplitude * 0.5 * (1 + Math.sin(2 * Math.PI * r / p.wavelength));
+    // Constant-amplitude concentric ripples covering the FULL panel rectangle,
+    // fading smoothly to flat in a margin near each edge. (Earlier this used a
+    // circular inscribed-circle mask which left flat corners on the lens — at
+    // angled camera views, light went through those flat corners un-refracted
+    // and you'd see the panel raw, reading as a glitch in the bottom of frame.)
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const halfW = W * 0.5, halfH = H * 0.5;
+      const margin = Math.min(W, H) * 0.18;  // last 18% of each edge fades to flat
+      return (x, y) => {
+        const dx = halfW - Math.abs(x);
+        const dy = halfH - Math.abs(y);
+        const d = Math.min(dx, dy);
+        if (d <= 0) return 0;
+        const env = d >= margin ? 1 : 0.5 * (1 - Math.cos(Math.PI * (d / margin)));
+        const r = Math.hypot(x, y);
+        const wave = 0.5 * (1 + Math.cos(TAU * r / p.wavelength));
+        return p.amplitude * wave * env;
+      };
+    },
+  },
+  stepped_ripple: {
+    label: 'Stepped Ripple',
+    params: {
+      wavelength: { value: 42,  min: 20, max: 200, step: 1 },
+      amplitude:  { value: 100, min: 0,  max: 200, step: 1 },   // central peak height (mm)
+      step:       { value: 10,  min: 0,  max: 60,  step: 0.5 }, // mm drop per ripple
+    },
+    // Stepped concentric ripples — the central peak is the tallest, and each
+    // successive ring is `step` mm shorter than the one inside it. Ripples now
+    // cover the full panel rectangle (not just an inscribed circle) and fade
+    // smoothly to flat near each panel edge, so there are no flat corners on
+    // the lens for un-refracted light to leak through.
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const halfW = W * 0.5, halfH = H * 0.5;
+      const wl   = Math.max(1, p.wavelength);
+      const amp  = p.amplitude;
+      const step = p.step != null ? p.step : 10;
+      const margin = Math.min(W, H) * 0.18;
+      return (x, y) => {
+        const dx = halfW - Math.abs(x);
+        const dy = halfH - Math.abs(y);
+        const d = Math.min(dx, dy);
+        if (d <= 0) return 0;
+        const env = d >= margin ? 1 : 0.5 * (1 - Math.cos(Math.PI * (d / margin)));
+        const r = Math.hypot(x, y);
+        const ampLocal = Math.max(0, amp - step * (r / wl));
+        const wave = 0.5 * (1 + Math.cos(TAU * r / wl));
+        return ampLocal * wave * env;
+      };
     },
   },
   torus_field: {
@@ -665,20 +1102,31 @@ const LENS_TYPES = {
       radius: { value: 280, min: 50, max: 600, step: 1 },
       height: { value: 40,  min: 1,  max: 120, step: 1 },
     },
-    fn: (p) => (x, y) => {
-      const r = Math.hypot(x, y);
-      if (r >= p.radius) return 0;
-      return p.height * 0.5 * (1 + Math.cos(Math.PI * r / p.radius));
+    // Spherical cap: section of a sphere with footprint radius `radius` and
+    // central height `height`. Uniformly convex (no inflection, no flared rim),
+    // so the apex reads as a clean outward bulge from any angle. The earlier
+    // cosine-bump profile had an inflection at r=R/2 that showed up as a
+    // central ripple/dimple under refraction.
+    fn: (p) => {
+      const R = p.radius;
+      const h = Math.max(0.0001, p.height);
+      const Rs = (R * R + h * h) / (2 * h);  // sphere radius from chord & sagitta
+      const cz = h - Rs;                      // sphere centre on the z-axis
+      return (x, y) => {
+        const r2 = x * x + y * y;
+        if (r2 >= R * R) return 0;
+        return cz + Math.sqrt(Rs * Rs - r2);
+      };
     },
   },
   morph_rings: {
     label: 'Morph Rings (square ↔ circle)',
     params: {
-      wavelength:   { value: 40, min: 10,  max: 200, step: 1 },
-      amplitude:    { value: 12, min: 0,   max: 60,  step: 0.5 },
-      morph_period: { value: 2,  min: 1,   max: 8,   step: 1 },
+      wavelength:   { value: 40,  min: 10, max: 200, step: 1 },
+      amplitude:    { value: 12,  min: 0,  max: 200, step: 0.5, label: 'bump height (mm)' },
+      morph_period: { value: 2,   min: 1,  max: 8,   step: 1 },
       bias:         { value: 0.5, min: 0,  max: 1,   step: 0.02 },
-      phase_shift:  { value: 0,  min: 0,   max: 1,   step: 0.01 },
+      phase_shift:  { value: 0,   min: 0,  max: 1,   step: 0.01 },
     },
     fn: (p, W, H) => {
       const TAU = Math.PI * 2;
@@ -969,15 +1417,19 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   params: {},
   ior: 1.49,
   dispersion: 0.0,
-  thickness: 30,
+  thickness: 15,
   roughness: 0.02,
   tint: '#ffffff',
   panelMode: 1,
-  panelScale: 40,
-  panelSpeed: 0.5,
+  panelScale: 80,
+  panelSpeed: 0.1,   // very slow default — Kit prefers a meditative pace; bump the speed slider to taste
   panelBrightness: 2.4,
   panelHue: 0.0,
   panelDistance: 30,
+  pgLineWidth: 0.06,   // pixelgrid: black gridline thickness (fraction of cell pitch)
+  pgFlow: 0.12,        // pixelgrid: drift speed (cells/sec). Default = barely-perceptible drift.
+  mirrorLens: true,    // fold lens height field into first quadrant for H+V symmetry
+  mirrorPanel: true,   // fold panel UV into first quadrant for H+V symmetry
   sqThickness: 0.5,
   sqSoftness: 0.3,
   sqMono: false,
@@ -998,6 +1450,8 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   recDuration: 10,
   recLoop: false,
   renderSmooth: '2× (clean)',
+  motionBlurSamples: 1,           // 1 = off, 4/8 = N sub-frames per output frame averaged for cinematic motion blur
+  superDispersion: false,         // export-time supersample of the transmission RT for sharper rainbow refraction
   maxQualityExport: true,
   watermarkText: '',
   autoOrbit: false,
@@ -1012,6 +1466,16 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   lensSpin: 0,
   bgColor: '#050505',
   bloomEnabled: false,
+  // Look Grade post-processing — applied after bloom, before output. Neutral
+  // defaults so the pass doesn't change the look until the user adjusts.
+  lookSaturation: 1.0,
+  lookContrast:   1.0,
+  lookVignette:   0.0,
+  lookGrain:      0.0,
+  lookSharpen:    0.0,
+  lookLutMix:     1.0,
+  lookLutName:    '',     // display only — name of currently loaded LUT
+  showDimensions: true,   // dimension overlay visible (fabrication readout)
   bloomStrength: 0.5,
   bloomRadius: 0.7,
   bloomThreshold: 0.82,
@@ -1031,6 +1495,9 @@ state.reset       = () => { resetAll(); };
 state.exportSTL   = () => { doExportSTL(false); };
 state.exportSTLB  = () => { doExportSTL(true); };
 state.screenshot  = () => { doScreenshot(); };
+state.exportSpec  = () => { doExportSpec(); };
+state.loadLut     = () => { document.getElementById('fileLut').click(); };
+state.clearLut    = () => { setLutTexture(null, ''); setStatus('LUT cleared'); };
 state.loadImage   = () => { document.getElementById('fileImage').click(); };
 state.loadVideo   = () => { document.getElementById('fileVideo').click(); };
 state.clearMedia  = () => { clearMedia(); };
@@ -1054,7 +1521,7 @@ state.seqStopPreview = () => {};
 state.seqExport      = () => {};
 state.seqClearAll    = () => {};
 state.seqEasing      = 'ease-in-out';
-state.seqDefaultTransition = 3.0;
+state.seqDefaultTransition = 10.0;
 state.seqDefaultHold = 0.5;
 
 function loadLensParams(which) {
@@ -1082,10 +1549,57 @@ function rebuildSoon() {
     rebuildLenses();
   });
 }
+// Wrap a lens height function so it's symmetric across X and Y. Folds the
+// sampled coordinate into the first quadrant (|x|, |y|) so the four quadrants
+// of the panel mirror each other. Useful for asymmetric lens types
+// (teardrops, voronoi, organic_bulbs, hex_cells, logo, etc.) — radially
+// symmetric lenses (ripple_field, dome) look identical with this on.
+function withMirror(fn, on) {
+  if (!on) return fn;
+  return (x, y) => fn(Math.abs(x), Math.abs(y));
+}
+
+// Recompute the dimension overlay panel from the current state. Walks the
+// lens height field at a coarse grid (4 mm step) to find peak height and
+// integrate volume, so the on-screen mass estimate matches reality. Cheap —
+// 22k samples for a 600×600 panel, runs only on rebuildLenses.
+function updateDimensionOverlay() {
+  const panel = document.getElementById('dimPanel');
+  if (!panel) return;
+  panel.classList.toggle('on', !!state.showDimensions);
+  if (!state.showDimensions) return;
+  try {
+    const W = state.panelWidth, H = state.panelHeight;
+    const type = LENS_TYPES[state.lensType];
+    const heightFn = withMirror(type.fn(state.params, W, H), state.mirrorLens);
+    const step = 4.0;
+    let maxZ = 0, volR = 0;
+    const cell = step * step;
+    for (let y = -H/2; y <= H/2; y += step) {
+      for (let x = -W/2; x <= W/2; x += step) {
+        const z = heightFn(x, y);
+        if (z > maxZ) maxZ = z;
+        if (z > 0) volR += z * cell;
+      }
+    }
+    const baseT = state.thickness;
+    const totalH = baseT + maxZ;
+    const volBase = W * H * baseT;
+    const massKg = ((volBase + volR) / 1e6) * 1.18 / 1000;
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set('dimFoot',   `${W} × ${H} mm`);
+    set('dimBase',   `${baseT.toFixed(0)} mm`);
+    set('dimPeak',   `${maxZ.toFixed(1)} mm`);
+    set('dimTotal',  `${totalH.toFixed(1)} mm`);
+    set('dimNarrow', `${baseT.toFixed(0)} mm`);
+    set('dimMass',   `${massKg.toFixed(1)} kg`);
+  } catch (_) { /* leave overlay stale on transient errors */ }
+}
+
 function rebuildLenses() {
   if (lensMesh) { lensMesh.geometry.dispose(); scene.remove(lensMesh); }
   const typeA = LENS_TYPES[state.lensType];
-  const hA = typeA.fn(state.params, state.panelWidth, state.panelHeight);
+  const hA = withMirror(typeA.fn(state.params, state.panelWidth, state.panelHeight), state.mirrorLens);
   const geoA = makeLensGeometry(hA, state.panelWidth, state.panelHeight, state.resolution, state.thickness, state.smoothing);
   lensMesh = new THREE.Mesh(geoA, lensMaterial);
   scene.add(lensMesh);
@@ -1101,10 +1615,13 @@ function rebuildLenses() {
     ledPanel.position.set(-offsetX, 0, ledZA);
     ledPanel.geometry.dispose();
     ledPanel.geometry = new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+    ledCasing.position.set(-offsetX, 0, ledZA - 15);
+    ledCasing.geometry.dispose();
+    ledCasing.geometry = new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
 
     if (lensMeshB) { lensMeshB.geometry.dispose(); scene.remove(lensMeshB); }
     const typeB = LENS_TYPES[state.lensTypeB];
-    const hB = typeB.fn(state.paramsB, state.panelWidth, state.panelHeight);
+    const hB = withMirror(typeB.fn(state.paramsB, state.panelWidth, state.panelHeight), state.mirrorLens);
     const geoB = makeLensGeometry(hB, state.panelWidth, state.panelHeight, state.resolution, state.thicknessB, state.smoothing);
     lensMeshB = new THREE.Mesh(geoB, lensMaterialB);
     lensMeshB.position.set(offsetX, 0, 0);
@@ -1114,6 +1631,10 @@ function rebuildLenses() {
     ledPanelB.position.set(offsetX, 0, ledZB);
     ledPanelB.geometry.dispose();
     ledPanelB.geometry = new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+    ledCasingB.visible = true;
+    ledCasingB.position.set(offsetX, 0, ledZB - 15);
+    ledCasingB.geometry.dispose();
+    ledCasingB.geometry = new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
 
     setStatus(`A: ${typeA.label}  ·  B: ${typeB.label}  ·  ${state.panelWidth}×${state.panelHeight} mm each`);
   } else {
@@ -1121,10 +1642,15 @@ function rebuildLenses() {
     ledPanel.position.set(0, 0, ledZA);
     ledPanel.geometry.dispose();
     ledPanel.geometry = new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+    ledCasing.position.set(0, 0, ledZA - 15);
+    ledCasing.geometry.dispose();
+    ledCasing.geometry = new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
     if (lensMeshB) { scene.remove(lensMeshB); lensMeshB.geometry.dispose(); lensMeshB = null; }
     ledPanelB.visible = false;
+    ledCasingB.visible = false;
     setStatus(`${typeA.label}  ·  ${state.panelWidth}×${state.panelHeight} mm  ·  ${(geoA.attributes.position.count).toLocaleString()} verts`);
   }
+  updateDimensionOverlay();
 }
 
 // -------------------------------------------------------------------------
@@ -1218,6 +1744,19 @@ const BUNDLES = {
       panelWidth: 600, panelHeight: 600, resolution: 2.0,
       ior: 1.49, dispersion: 1.5, thickness: 30, roughness: 0.01, tint: '#ffffff',
       panelMode: 11, panelScale: 160, panelSpeed: 0.12, panelBrightness: 3.0, panelHue: 0.72, panelDistance: 35,
+      compare: false,
+    },
+  },
+  stepped_tower: {
+    label: 'Stepped Tower',
+    note: 'Tall tiered ripple — central 100mm peak, each ring 10mm shorter, drifting B&W pixel grid',
+    state: {
+      lensType: 'stepped_ripple',
+      params: { wavelength: 42, amplitude: 100, step: 10 },
+      panelWidth: 600, panelHeight: 600, resolution: 1.0,
+      ior: 1.49, dispersion: 0.5, thickness: 15, roughness: 0.02, tint: '#ffffff',
+      panelMode: 1, panelScale: 80, panelSpeed: 0.5, panelBrightness: 2.4, panelHue: 0.0, panelDistance: 30,
+      pgLineWidth: 0.06, pgFlow: 0.4,
       compare: false,
     },
   },
@@ -1328,10 +1867,11 @@ function presetSnapshot() {
   for (const k of [
     'lensType','panelWidth','panelHeight','resolution','smoothing','params',
     'ior','dispersion','thickness','roughness','tint',
-    'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelDistance',
+    'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelDistance','pgLineWidth','pgFlow','mirrorPanel','mirrorLens',
     'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
     'sqGradient','sqGradA','sqGradB','sqGradC','sqGradAxis','sqGradScale','sqGradFlow',
     'bgColor','bloomEnabled','bloomStrength','bloomRadius','bloomThreshold','lensSpin',
+    'lookSaturation','lookContrast','lookVignette','lookGrain','lookSharpen','lookLutMix',
     'compare','lensTypeB','paramsB','iorB','dispersionB','thicknessB','roughnessB','tintB',
   ]) s[k] = JSON.parse(JSON.stringify(state[k]));
   return s;
@@ -1343,6 +1883,26 @@ function applyPreset(p) {
   if (!('resolution' in p) || state.resolution > 2.5) state.resolution = 1.0;
   if (!('bgColor' in p)) state.bgColor = '#050505';
   if (!('bloomEnabled' in p)) state.bloomEnabled = false;
+  if (!('pgLineWidth' in p)) state.pgLineWidth = 0.06;
+  if (!('pgFlow' in p)) state.pgFlow = 0.4;
+  if (!('mirrorLens' in p)) state.mirrorLens = true;
+  if (!('mirrorPanel' in p)) state.mirrorPanel = true;
+  if (!('lookSaturation' in p)) state.lookSaturation = 1.0;
+  if (!('lookContrast' in p))   state.lookContrast   = 1.0;
+  if (!('lookVignette' in p))   state.lookVignette   = 0.0;
+  if (!('lookGrain' in p))      state.lookGrain      = 0.0;
+  if (!('lookSharpen' in p))    state.lookSharpen    = 0.0;
+  if (!('lookLutMix' in p))     state.lookLutMix     = 1.0;
+  // Backfill any per-lens-type params that didn't exist when this preset was saved.
+  // Without this, buildParamFolders crashes if the lens added new params after the
+  // preset was last saved (e.g. ripple_field gained a `step` param).
+  const fillMissingParams = (lensType, paramsObj) => {
+    const defs = LENS_TYPES[lensType] && LENS_TYPES[lensType].params;
+    if (!defs || !paramsObj) return;
+    for (const k in defs) if (!(k in paramsObj)) paramsObj[k] = defs[k].value;
+  };
+  fillMissingParams(state.lensType, state.params);
+  fillMissingParams(state.lensTypeB, state.paramsB);
   syncMaterials();
   syncShader();
   syncScene();
@@ -1365,7 +1925,7 @@ function saveAsDefaults() {
   const snap = presetSnapshot();
   // Also capture Capture / scene fields that aren't in the standard preset snapshot.
   for (const k of [
-    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','maxQualityExport','panelSmooth','watermarkText',
+    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','motionBlurSamples','superDispersion','maxQualityExport','panelSmooth','watermarkText',
     'autoOrbit','orbitSpeed','orbitArc',
     'autoZoom','zoomAmount','zoomSpeed',
     'autoPan','panAmount','panSpeed',
@@ -1435,6 +1995,97 @@ function exportAllPresets() {
   a.click();
   setStatus('presets exported');
 }
+// --- 3D LUT loading (Adobe / Resolve .CUBE format) ---------------------------
+// Parse a CUBE file's text into { size, data: Float32Array(N*N*N*4) } packed
+// for a 2D strip texture of width N*N, height N. Stride is RGBA float.
+function parseCubeLut(text) {
+  const lines = text.split(/\r?\n/);
+  let size = 0;
+  const flat = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.toUpperCase().startsWith('TITLE')) continue;
+    if (line.toUpperCase().startsWith('LUT_3D_SIZE')) {
+      size = parseInt(line.split(/\s+/)[1], 10);
+      continue;
+    }
+    if (line.toUpperCase().startsWith('LUT_1D_SIZE')) {
+      throw new Error('1D LUTs (.cube LUT_1D_SIZE) not supported — please supply a 3D LUT.');
+    }
+    if (line.toUpperCase().startsWith('DOMAIN_')) continue;
+    const parts = line.split(/\s+/).map(parseFloat);
+    if (parts.length === 3 && parts.every(v => !isNaN(v))) {
+      flat.push(parts[0], parts[1], parts[2]);
+    }
+  }
+  if (size <= 1) throw new Error('LUT_3D_SIZE missing or invalid in CUBE file');
+  const expected = size * size * size * 3;
+  if (flat.length !== expected) {
+    throw new Error(`CUBE data size mismatch — got ${flat.length / 3} entries, expected ${size**3}`);
+  }
+  // Repack from CUBE order (r fastest, then g, then b) into a 2D strip where
+  // row = g, col = b*size + r. Texture is N*N wide, N tall, RGBA float.
+  const N = size, N2 = N * N;
+  const out = new Float32Array(N2 * N * 4);
+  for (let b = 0; b < N; b++) {
+    for (let g = 0; g < N; g++) {
+      for (let r = 0; r < N; r++) {
+        const cubeIdx = ((b * N + g) * N + r) * 3;
+        const tx = b * N + r, ty = g;
+        const o  = (ty * N2 + tx) * 4;
+        out[o + 0] = flat[cubeIdx + 0];
+        out[o + 1] = flat[cubeIdx + 1];
+        out[o + 2] = flat[cubeIdx + 2];
+        out[o + 3] = 1.0;
+      }
+    }
+  }
+  return { size: N, data: out };
+}
+
+function setLutTexture(lut, name) {
+  if (!lookPass) return;
+  // Dispose old texture if any
+  const old = lookPass.uniforms.tLut.value;
+  if (old && old.dispose) old.dispose();
+  if (!lut) {
+    lookPass.uniforms.tLut.value = null;
+    lookPass.uniforms.uLutSize.value = 0;
+    state.lookLutName = '';
+  } else {
+    const tex = new THREE.DataTexture(lut.data, lut.size * lut.size, lut.size, THREE.RGBAFormat, THREE.FloatType);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.colorSpace = THREE.NoColorSpace;
+    tex.needsUpdate = true;
+    lookPass.uniforms.tLut.value = tex;
+    lookPass.uniforms.uLutSize.value = lut.size;
+    state.lookLutName = name || '';
+  }
+  guiRefresh();
+}
+
+document.getElementById('fileLut').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const lut = parseCubeLut(String(reader.result));
+      setLutTexture(lut, file.name);
+      setStatus(`LUT loaded — ${file.name} (${lut.size}³)`);
+    } catch (err) {
+      console.error(err);
+      setStatus(`LUT load failed — ${err.message}`);
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
 document.getElementById('fileLogo').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
@@ -1481,6 +2132,9 @@ function syncShader() {
     m.uniforms.uSpeed.value       = state.panelSpeed;
     m.uniforms.uBrightness.value  = state.panelBrightness;
     m.uniforms.uHueShift.value    = state.panelHue;
+    m.uniforms.uPgLineWidth.value = state.pgLineWidth != null ? state.pgLineWidth : 0.06;
+    m.uniforms.uPgFlow.value      = state.pgFlow      != null ? state.pgFlow      : 0.4;
+    m.uniforms.uPanelMirror.value = state.mirrorPanel ? 1 : 0;
     m.uniforms.uSqThickness.value = state.sqThickness;
     m.uniforms.uSqSoftness.value  = state.sqSoftness;
     m.uniforms.uSqMono.value      = state.sqMono ? 1 : 0;
@@ -1497,6 +2151,8 @@ function syncShader() {
   }
   ledPanel.position.z  = -(state.thickness  + state.panelDistance);
   ledPanelB.position.z = -(state.thicknessB + state.panelDistance);
+  ledCasing.position.z  = -(state.thickness  + state.panelDistance) - 15;
+  ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15;
 }
 function syncScene() {
   scene.background = new THREE.Color(state.bgColor);
@@ -1508,11 +2164,22 @@ function syncBloom() {
   bloomPass.radius    = state.bloomRadius;
   bloomPass.threshold = state.bloomThreshold;
 }
+// Push current Look Grade state to the post-processing uniforms. Call after any
+// state reset / preset application / migration backfill.
+function syncLook() {
+  if (!lookPass) return;
+  lookPass.uniforms.uSaturation.value = state.lookSaturation != null ? state.lookSaturation : 1.0;
+  lookPass.uniforms.uContrast.value   = state.lookContrast   != null ? state.lookContrast   : 1.0;
+  lookPass.uniforms.uVignette.value   = state.lookVignette   != null ? state.lookVignette   : 0.0;
+  lookPass.uniforms.uGrain.value      = state.lookGrain      != null ? state.lookGrain      : 0.0;
+  lookPass.uniforms.uSharpen.value    = state.lookSharpen    != null ? state.lookSharpen    : 0.0;
+  lookPass.uniforms.uLutMix.value     = state.lookLutMix     != null ? state.lookLutMix     : 1.0;
+}
 function resetAll() {
   const d = defaultStateSnapshot();
   for (const k in d) state[k] = d[k];
   loadLensParams('A'); loadLensParams('B');
-  syncMaterials(); syncShader(); syncScene(); syncBloom();
+  syncMaterials(); syncShader(); syncScene(); syncBloom(); syncLook();
   buildParamFolders();
   rebuildLenses();
   guiRefresh();
@@ -1588,6 +2255,86 @@ function doExportSTL(isB) {
     setStatus(`exported ${fname}`);
   } catch (e) { console.error(e); setStatus('export failed — see console'); }
 }
+
+// Generate a fabrication brief markdown for the manufacturer. Walks the lens
+// height field, computes peak ridges + narrowest section + bounding box +
+// estimated mass in cast PMMA, and writes a one-page summary alongside the STL.
+function doExportSpec() {
+  try {
+    const W = state.panelWidth, H = state.panelHeight;
+    const type = LENS_TYPES[state.lensType];
+    const heightFn = type.fn(state.params, W, H);
+    const wrapped = state.mirrorLens ? (x, y) => heightFn(Math.abs(x), Math.abs(y)) : heightFn;
+    // Sample at a fine grid to find peak height + integrated volume estimate.
+    const step = 2.0;  // mm
+    let maxZ = 0;
+    let volRipple = 0;
+    const cellArea = step * step;
+    for (let y = -H/2; y <= H/2; y += step) {
+      for (let x = -W/2; x <= W/2; x += step) {
+        const z = wrapped(x, y);
+        if (z > maxZ) maxZ = z;
+        if (z > 0) volRipple += z * cellArea;
+      }
+    }
+    const baseT = state.thickness;
+    const totalH = baseT + maxZ;
+    const volBase = W * H * baseT;       // mm³
+    const volTotal = volBase + volRipple; // mm³
+    const PMMA_DENSITY = 1.18;            // g/cm³
+    const massKg = (volTotal / 1000) * PMMA_DENSITY / 1000;
+    const lines = [
+      `# Prismatica — Fabrication Spec Sheet`,
+      ``,
+      `Generated: ${new Date().toISOString().slice(0, 10)}`,
+      `Project: Custom acrylic refractive lens for light installation`,
+      ``,
+      `## Part`,
+      `- **Material**: Cast PMMA (acrylic), clear, optical grade preferred`,
+      `- **Footprint**: ${W} × ${H} mm`,
+      `- **Base thickness (flat back)**: ${baseT} mm`,
+      `- **Maximum surface height above base**: ${maxZ.toFixed(1)} mm`,
+      `- **Overall part height**: ${totalH.toFixed(1)} mm (footprint × peak)`,
+      `- **Narrowest section**: ${baseT} mm (at ripple troughs and panel edges)`,
+      ``,
+      `## Volume + mass`,
+      `- Base slab volume: ${(volBase / 1e6).toFixed(2)} L`,
+      `- Sculpted ripple volume: ${(volRipple / 1e6).toFixed(2)} L`,
+      `- Total volume: ${(volTotal / 1e6).toFixed(2)} L`,
+      `- Estimated mass (cast PMMA, ρ = 1.18 g/cm³): **${massKg.toFixed(1)} kg**`,
+      ``,
+      `## Surface profile — ${type.label}`,
+      ...Object.entries(state.params).map(([k, v]) => `- ${k}: ${v}`),
+      `- Mirror H+V: ${state.mirrorLens ? 'enabled' : 'disabled'}`,
+      ``,
+      `## Optical properties (target)`,
+      `- IOR: ${state.ior}`,
+      `- Dispersion (Abbe-equivalent): ${state.dispersion}`,
+      `- Surface roughness: ${state.roughness}`,
+      `- Tint: ${state.tint}`,
+      ``,
+      `## Files supplied`,
+      `- High-resolution STL (sealed solid: top + flat back + perimeter walls)`,
+      `- This spec sheet`,
+      ``,
+      `## Manufacturing notes`,
+      `- Top sculpted face: diamond-polish or vapour-polish for optical clarity.`,
+      `- Bottom flat face: standard machined finish acceptable; fine surface texture is fine since it sits against the LED enclosure.`,
+      `- Tolerance on overall dimensions: ±0.5 mm acceptable; surface profile tolerance ±0.2 mm.`,
+      `- Side walls: clean cut, can be polished or matte to taste.`,
+      `- 5-axis CNC milling on cast PMMA stock is the expected process. Diamond-turning is overkill for this scale.`,
+      `- For repeat production runs (5+ pieces), casting from a master mould is more economical than per-piece CNC.`,
+      ``,
+      `## Contact`,
+      `Kit Webster — kit.webster@gmail.com`,
+    ];
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+    const a = document.createElement('a');
+    const fname = `prismatica_spec_${state.lensType}_${W}x${H}_${baseT}mmbase.md`;
+    a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+    setStatus(`exported ${fname} · ${massKg.toFixed(1)} kg estimated`);
+  } catch (e) { console.error(e); setStatus('spec export failed — see console'); }
+}
 function doScreenshot() {
   renderFrame();
   const text = (state.watermarkText || '').trim();
@@ -1652,8 +2399,11 @@ function buildParamFolders() {
   const defsA = LENS_TYPES[state.lensType].params;
   for (const k in defsA) {
     const d = defsA[k];
-    if (typeof d.value === 'boolean') paramFolderA.add(state.params, k).name(labelFor(k)).onChange(rebuildLenses);
-    else paramFolderA.add(state.params, k, d.min, d.max, d.step).name(labelFor(k)).onChange(rebuildSoon).onFinishChange(rebuildLenses);
+    // Defensive: if a saved preset is missing a newer param, backfill from the lens type's default.
+    if (state.params[k] === undefined) state.params[k] = d.value;
+    const lbl = d.label || labelFor(k);
+    if (typeof d.value === 'boolean') paramFolderA.add(state.params, k).name(lbl).onChange(rebuildLenses);
+    else paramFolderA.add(state.params, k, d.min, d.max, d.step).name(lbl).onChange(rebuildSoon).onFinishChange(rebuildLenses);
   }
 
   if (!state.compare) {
@@ -1674,8 +2424,10 @@ function buildParamFolders() {
   const defsB = LENS_TYPES[state.lensTypeB].params;
   for (const k in defsB) {
     const d = defsB[k];
-    if (typeof d.value === 'boolean') paramFolderB.add(state.paramsB, k).name(labelFor(k)).onChange(rebuildLenses);
-    else paramFolderB.add(state.paramsB, k, d.min, d.max, d.step).name(labelFor(k)).onChange(rebuildSoon).onFinishChange(rebuildLenses);
+    if (state.paramsB[k] === undefined) state.paramsB[k] = d.value;
+    const lbl = d.label || labelFor(k);
+    if (typeof d.value === 'boolean') paramFolderB.add(state.paramsB, k).name(lbl).onChange(rebuildLenses);
+    else paramFolderB.add(state.paramsB, k, d.min, d.max, d.step).name(lbl).onChange(rebuildSoon).onFinishChange(rebuildLenses);
   }
 
   if (!paramFolderMatB) paramFolderMatB = gui.addFolder('B · acrylic');
@@ -1895,6 +2647,7 @@ function playSequencePreview() {
   if (sequencePlaying) return;
   sequencePlaying = true;
   sequenceStartMs = performance.now();
+  setBtnActive(seqPlayBtnCtrl, true, { labelOn: '✓ playing — stop  [Enter]', labelOff: '▶ preview sequence  [Enter]' });
   setStatus(`▶ previewing sequence (${sequenceTotalDuration().toFixed(1)}s)`);
 }
 function stopSequencePreview() {
@@ -1907,18 +2660,31 @@ function stopSequencePreview() {
   zoomBaseDist = null;
   zoomPhase = 0;
   panPhase = 0;
+  setBtnActive(seqPlayBtnCtrl, false, { labelOn: '✓ playing — stop  [Enter]', labelOff: '▶ preview sequence  [Enter]' });
   setStatus('preview stopped');
 }
 
 // Wire into state actions (after function defs so closures work)
 state.seqAddShot     = () => { addShotToSequence(); };
-state.seqPreview     = () => { playSequencePreview(); };
+// Preview button toggles play/stop so the active state on the button matches what it does.
+state.seqPreview     = () => { if (sequencePlaying) stopSequencePreview(); else playSequencePreview(); };
 state.seqStopPreview = () => { stopSequencePreview(); };
 state.seqClearAll    = () => { clearShotSequence(); };
 state.seqExport      = () => { renderOffline({ sequence: true }); };
 
 // --- Shot sequence GUI section — rebuilt on every add/remove/move ---
 let fSeq = null;
+// References to the toggle-style action buttons so we can flip their visual
+// state (label + colour) when the underlying mode toggles on/off.
+let ecoBtnCtrl = null, pauseBtnCtrl = null, recordBtnCtrl = null, seqPlayBtnCtrl = null;
+function setBtnActive(ctrl, active, opts = {}) {
+  if (!ctrl || !ctrl.domElement) return;
+  const labelOn  = opts.labelOn,  labelOff = opts.labelOff;
+  if (active && labelOn)  ctrl.name(labelOn);
+  if (!active && labelOff) ctrl.name(labelOff);
+  ctrl.domElement.classList.toggle('btn-active', !!active);
+  if (opts.recColour) ctrl.domElement.classList.toggle('btn-rec', !!active);
+}
 const seqShotFolders = [];  // sub-folders for each shot
 function rebuildSequenceGUI() {
   if (!fSeq) return;
@@ -1939,7 +2705,7 @@ function rebuildSequenceGUI() {
     };
     fs.add(acts, 'load').name('▶ jump to this shot');
     fs.add(acts, 'replace').name('⟳ replace with current view');
-    if (i > 0) fs.add(shot, 'transitionSec', 0, 20, 0.1).name('transition from prev (s)').onChange(saveShotSequence);
+    if (i > 0) fs.add(shot, 'transitionSec', 0, 30, 0.1).name('transition from prev (s)').onChange(saveShotSequence);
     fs.add(shot, 'holdSec', 0, 10, 0.1).name('hold on this shot (s)').onChange(saveShotSequence);
     if (i > 0) fs.add(acts, 'up').name('↑ move earlier');
     if (i < shotSequence.length - 1) fs.add(acts, 'down').name('↓ move later');
@@ -1967,6 +2733,7 @@ function rebuildSequenceGUI() {
   fA.add(state, 'resolution', 0.5, 8.0, 0.5).name('mesh res (mm)').onFinishChange(rebuildLenses);
   fA.add(state, 'smoothing', 0, 6, 1).name('surface smoothing').onFinishChange(rebuildLenses);
   fA.add(state, 'compare').name('compare A | B').onChange(() => { buildParamFolders(); rebuildLenses(); });
+  fA.add(state, 'mirrorLens').name('mirror H + V (symmetric)').onChange(rebuildLenses);
   fA.add(state, 'loadLogo').name('load logo…');
 
   buildParamFolders();
@@ -1979,52 +2746,83 @@ function rebuildSequenceGUI() {
   f1.addColor(state, 'tint').onChange(syncMaterials);
 
   const f2 = gui.addFolder('LED Panel');
-  f2.add(state, 'panelMode', { checker: 0, pixelgrid: 1, wave: 2, radial: 3, scanlines: 4, noise: 5, white: 6, image: 7, video: 8, stars: 9, spiral: 10, rings: 11, rays: 12, squares: 13 })
-    .name('content').onChange(v => { const m = +v; state.panelMode = m; ledMat.uniforms.uMode.value = m; ledMatB.uniforms.uMode.value = m; });
-  f2.add(state, 'panelScale', 4, 200, 1).name('pixels').onChange(v => { ledMat.uniforms.uScale.value = v; ledMatB.uniforms.uScale.value = v; });
-  f2.add(state, 'panelSpeed', 0.0, 3.0, 0.05).name('speed').onChange(v => { ledMat.uniforms.uSpeed.value = v; ledMatB.uniforms.uSpeed.value = v; });
-  f2.add(state, 'panelBrightness', 0.2, 6.0, 0.05).name('brightness').onChange(v => { ledMat.uniforms.uBrightness.value = v; ledMatB.uniforms.uBrightness.value = v; });
-  f2.add(state, 'panelHue', 0.0, 1.0, 0.01).name('hue shift').onChange(v => { ledMat.uniforms.uHueShift.value = v; ledMatB.uniforms.uHueShift.value = v; });
-  f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { ledPanel.position.z = -(state.thickness + state.panelDistance); ledPanelB.position.z = -(state.thicknessB + state.panelDistance); });
-  f2.add(state, 'panelSmooth').name('smooth panel (anti-alias)').onChange(v => { ledMat.uniforms.uPanelSmooth.value = v ? 1 : 0; ledMatB.uniforms.uPanelSmooth.value = v ? 1 : 0; });
-  f2.add(state, 'loadImage').name('load image…');
-  f2.add(state, 'loadVideo').name('load video…');
-  f2.add(state, 'clearMedia').name('clear media');
+  // Removed from dropdown: checker (0), noise (5 — glitchy), stars (9). Underlying
+  // shader branches kept for legacy saved-state compatibility.
+  const panelModeCtrl = f2.add(state, 'panelMode', { pixelgrid: 1, wave: 2, radial: 3, scanlines: 4, white: 6, image: 7, video: 8, spiral: 10, rings: 11, rays: 12, squares: 13, 'liquid iridescence': 14, 'plasma aurora': 15, 'bubble flow': 16, 'liquid mercury': 17, 'caustics': 18, 'warped grid': 19, 'wavefield grid': 20, 'diamond bands': 21 })
+    .name('content').onChange(v => { const m = +v; state.panelMode = m; ledMat.uniforms.uMode.value = m; ledMatB.uniforms.uMode.value = m; updatePanelControlVisibility(); });
+  const ctlPanelScale  = f2.add(state, 'panelScale', 4, 200, 1).name('pixels').onChange(v => { ledMat.uniforms.uScale.value = v; ledMatB.uniforms.uScale.value = v; });
+  const ctlPanelSpeed  = f2.add(state, 'panelSpeed', 0.0, 3.0, 0.05).name('speed').onChange(v => { ledMat.uniforms.uSpeed.value = v; ledMatB.uniforms.uSpeed.value = v; });
+  const ctlPanelBright = f2.add(state, 'panelBrightness', 0.2, 6.0, 0.05).name('brightness').onChange(v => { ledMat.uniforms.uBrightness.value = v; ledMatB.uniforms.uBrightness.value = v; });
+  const ctlPanelHue    = f2.add(state, 'panelHue', 0.0, 1.0, 0.01).name('hue shift').onChange(v => { ledMat.uniforms.uHueShift.value = v; ledMatB.uniforms.uHueShift.value = v; });
+  const ctlPgLineWidth = f2.add(state, 'pgLineWidth', 0.0, 0.4, 0.005).name('grid line thickness').onChange(v => { ledMat.uniforms.uPgLineWidth.value = v; ledMatB.uniforms.uPgLineWidth.value = v; });
+  const ctlPgFlow      = f2.add(state, 'pgFlow', -5.0, 5.0, 0.01).name('grid drift speed').onChange(v => { ledMat.uniforms.uPgFlow.value = v; ledMatB.uniforms.uPgFlow.value = v; });
+  const ctlMirrorPanel = f2.add(state, 'mirrorPanel').name('mirror H + V (symmetric)').onChange(v => { ledMat.uniforms.uPanelMirror.value = v ? 1 : 0; ledMatB.uniforms.uPanelMirror.value = v ? 1 : 0; });
+  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { ledPanel.position.z = -(state.thickness + state.panelDistance); ledPanelB.position.z = -(state.thicknessB + state.panelDistance); ledCasing.position.z = -(state.thickness + state.panelDistance) - 15; ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15; });
+  const ctlPanelSmooth = f2.add(state, 'panelSmooth').name('smooth panel (anti-alias)').onChange(v => { ledMat.uniforms.uPanelSmooth.value = v ? 1 : 0; ledMatB.uniforms.uPanelSmooth.value = v ? 1 : 0; });
+  const ctlLoadImage   = f2.add(state, 'loadImage').name('load image…');
+  const ctlLoadVideo   = f2.add(state, 'loadVideo').name('load video…');
+  const ctlClearMedia  = f2.add(state, 'clearMedia').name('clear media');
 
-  const f2s = f2.addFolder('Squares');
-  f2s.add(state, 'sqThickness', 0.02, 0.98, 0.01).name('thickness').onChange(v => { ledMat.uniforms.uSqThickness.value = v; ledMatB.uniforms.uSqThickness.value = v; });
-  f2s.add(state, 'sqSoftness', 0.0, 1.0, 0.01).name('softness').onChange(v => { ledMat.uniforms.uSqSoftness.value = v; ledMatB.uniforms.uSqSoftness.value = v; });
-  f2s.add(state, 'sqHueSpread', 0.0, 8.0, 0.1).name('hue spread').onChange(v => { ledMat.uniforms.uSqHueSpread.value = v; ledMatB.uniforms.uSqHueSpread.value = v; });
-  f2s.add(state, 'sqMono').name('black & white').onChange(v => { ledMat.uniforms.uSqMono.value = v ? 1 : 0; ledMatB.uniforms.uSqMono.value = v ? 1 : 0; });
-  f2s.add(state, 'sqReverse').name('reverse direction').onChange(v => { ledMat.uniforms.uSqDir.value = v ? -1.0 : 1.0; ledMatB.uniforms.uSqDir.value = v ? -1.0 : 1.0; });
-  // Gradient overlay — baked into the panel, so the lens magnifies & stretches it
-  // through refraction whenever the camera moves. Great for filming lots of perspectives.
-  const f2sg = f2s.addFolder('Gradient overlay');
-  f2sg.add(state, 'sqGradient').name('enable gradient').onChange(v => { ledMat.uniforms.uSqGrad.value = v ? 1 : 0; ledMatB.uniforms.uSqGrad.value = v ? 1 : 0; });
-  f2sg.addColor(state, 'sqGradA').name('colour A').onChange(v => { ledMat.uniforms.uSqGradA.value.set(v); ledMatB.uniforms.uSqGradA.value.set(v); });
-  f2sg.addColor(state, 'sqGradB').name('colour B').onChange(v => { ledMat.uniforms.uSqGradB.value.set(v); ledMatB.uniforms.uSqGradB.value.set(v); });
-  f2sg.addColor(state, 'sqGradC').name('colour C').onChange(v => { ledMat.uniforms.uSqGradC.value.set(v); ledMatB.uniforms.uSqGradC.value.set(v); });
-  f2sg.add(state, 'sqGradAxis', { radial: 0, horizontal: 1, vertical: 2, diagonal: 3, angular: 4 })
-    .name('axis').onChange(v => { const n = +v | 0; state.sqGradAxis = n; ledMat.uniforms.uSqGradAxis.value = n; ledMatB.uniforms.uSqGradAxis.value = n; });
-  f2sg.add(state, 'sqGradScale', 0.25, 6.0, 0.05).name('scale (bands)').onChange(v => { ledMat.uniforms.uSqGradScale.value = v; ledMatB.uniforms.uSqGradScale.value = v; });
-  f2sg.add(state, 'sqGradFlow', -1.0, 1.0, 0.01).name('flow speed').onChange(v => { ledMat.uniforms.uSqGradFlow.value = v; ledMatB.uniforms.uSqGradFlow.value = v; });
+  // Per-mode control visibility — hide sliders that don't apply to the active
+  // shader so the GUI only ever shows things the user can actually tune.
+  // Mode applicability:
+  //   - pixels (uScale): used by pixelgrid (1), radial (3), rings (11), warped grid (19), wavefield grid (20), diamond bands (21), squares (13). Not used by fluid shaders.
+  //   - hue shift (uHueShift): respected by everything that uses hsv2rgb / iqPalette.
+  //   - grid line thickness + drift: ONLY pixelgrid (1), warped grid (19), wavefield grid (20).
+  //   - load image / load video / clear media: ONLY image (7), video (8).
+  //   - speed, brightness, gap, smooth, mirror: relevant to ALL animated modes.
+  const MODE_USES_SCALE = new Set([1, 3, 11, 13, 19, 20, 21]);
+  const MODE_USES_GRID  = new Set([1, 19, 20]);
+  const MODE_USES_HUE   = new Set([1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+  const MODE_IS_MEDIA   = new Set([7, 8]);
+  function updatePanelControlVisibility() {
+    const m = +state.panelMode | 0;
+    ctlPanelScale.show(MODE_USES_SCALE.has(m));
+    ctlPanelHue.show(MODE_USES_HUE.has(m));
+    ctlPgLineWidth.show(MODE_USES_GRID.has(m));
+    ctlPgFlow.show(MODE_USES_GRID.has(m));
+    ctlLoadImage.show(MODE_IS_MEDIA.has(m));
+    ctlLoadVideo.show(MODE_IS_MEDIA.has(m));
+    ctlClearMedia.show(MODE_IS_MEDIA.has(m));
+    // panelSpeed/Brightness/Distance/Smooth/Mirror always shown — they apply universally.
+  }
+  updatePanelControlVisibility();
 
-  const fScene = gui.addFolder('Scene');
+  // Squares folder + Gradient Overlay subfolder removed at Kit's request.
+  // The squares panel mode (13) and its uniforms still exist underneath, so any
+  // saved preset that was using them keeps working — only the GUI controls are gone.
+
+  const fScene = gui.addFolder('Scene').close();
   fScene.addColor(state, 'bgColor').name('background').onChange(syncScene);
-  fScene.add(state, 'lensSpin', -180, 180, 1).name('lens spin (°/s)');
-  const fBloom = fScene.addFolder('Bloom');
+  // Lens spin slider removed at Kit's request — driven exclusively by the shot
+  // sequence now. The state.lensSpin value stays at 0 by default; legacy saved
+  // presets that set it to non-zero will still spin until reset.
+  const fBloom = fScene.addFolder('Bloom').close();
   fBloom.add(state, 'bloomEnabled').name('enabled').onChange(syncBloom);
   fBloom.add(state, 'bloomStrength', 0.0, 2.0, 0.01).name('strength').onChange(syncBloom);
   fBloom.add(state, 'bloomRadius', 0.0, 1.5, 0.01).name('radius').onChange(syncBloom);
   fBloom.add(state, 'bloomThreshold', 0.0, 1.0, 0.01).name('threshold').onChange(syncBloom);
 
+  // Look Grade — colour grade + finishing on the final composited image.
+  // Applies to live view AND offline renders so the export carries your grade.
+  const fLook = fScene.addFolder('Look Grade').close();
+  fLook.add(state, 'lookSaturation', 0.0, 2.0, 0.01).name('saturation').onChange(v => { lookPass.uniforms.uSaturation.value = v; });
+  fLook.add(state, 'lookContrast',   0.5, 2.0, 0.01).name('contrast').onChange(v => { lookPass.uniforms.uContrast.value = v; });
+  fLook.add(state, 'lookSharpen',    0.0, 1.0, 0.005).name('sharpen').onChange(v => { lookPass.uniforms.uSharpen.value = v; });
+  fLook.add(state, 'lookVignette',   0.0, 1.0, 0.01).name('vignette').onChange(v => { lookPass.uniforms.uVignette.value = v; });
+  fLook.add(state, 'lookGrain',      0.0, 1.0, 0.01).name('film grain').onChange(v => { lookPass.uniforms.uGrain.value = v; });
+  fLook.add(state, 'loadLut').name('load LUT (.cube)…');
+  fLook.add(state, 'lookLutMix', 0.0, 1.0, 0.01).name('LUT strength').onChange(v => { lookPass.uniforms.uLutMix.value = v; });
+  fLook.add(state, 'clearLut').name('clear LUT');
+  fLook.add(state, 'lookLutName').name('current LUT').listen().disable();
+
   fSeq = gui.addFolder('Shot Sequence (storyboard)');
   fSeq.add(state, 'seqAddShot').name('➕ save shot (current view)  [N]');
-  fSeq.add(state, 'seqPreview').name('▶ preview sequence  [Enter]');
+  seqPlayBtnCtrl = fSeq.add(state, 'seqPreview').name('▶ preview sequence  [Enter]');
   fSeq.add(state, 'seqStopPreview').name('⏹ stop preview');
   fSeq.add(state, 'seqExport').name('🎬 export sequence as video');
   fSeq.add(state, 'seqEasing', Object.keys(EASINGS)).name('easing curve');
-  fSeq.add(state, 'seqDefaultTransition', 0.1, 15, 0.1).name('default transition (s)');
+  fSeq.add(state, 'seqDefaultTransition', 0.1, 30, 0.1).name('default transition (s)');
   fSeq.add(state, 'seqDefaultHold', 0, 5, 0.1).name('default hold (s)');
   fSeq.add(state, 'seqClearAll').name('× clear all shots');
   // Info line — shows shot count + total duration, updated after rebuild
@@ -2034,29 +2832,22 @@ function rebuildSequenceGUI() {
 
   const fCap = gui.addFolder('Capture');
   fCap.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('quality').onChange(applyRenderQuality);
-  fCap.add(state, 'autoOrbit').name('auto orbit').onChange(() => { orbitHomeAzimuth = null; });
-  fCap.add(state, 'orbitSpeed', 0.005, 0.2, 0.005).name('orbit speed');
-  fCap.add(state, 'orbitArc', 10, 90, 1).name('orbit arc (°)');
-  fCap.add(state, 'autoZoom').name('auto zoom');
-  fCap.add(state, 'zoomAmount', 0.02, 0.8, 0.01).name('zoom range');
-  fCap.add(state, 'zoomSpeed', 0.01, 0.5, 0.005).name('zoom speed');
-  fCap.add(state, 'autoPan').name('auto pan (up/down)').onChange(() => { updateCameraMotion._lastPanDy = 0; panPhase = 0; });
-  fCap.add(state, 'panAmount', 0.02, 0.6, 0.01).name('pan range');
-  fCap.add(state, 'panSpeed', 0.01, 0.3, 0.005).name('pan speed');
   fCap.add(state, 'recAspect', Object.keys(REC_ASPECTS)).name('video aspect').onChange(updateAspectOverlay);
   fCap.add(state, 'recResolution', Object.keys(REC_RESOLUTIONS)).name('output resolution');
   fCap.add(state, 'recFps', { '24 (cinematic)': 24, '30 (Instagram)': 30, '60 (smooth)': 60 }).name('video fps');
   fCap.add(state, 'recDuration', 1, 60, 1).name('duration (s)');
   fCap.add(state, 'recLoop').name('loopable (reels)');
-  fCap.add(state, 'snapToLoop').name('⤴ snap speeds to loop');
-  fCap.add(state, 'renderSmooth', ['off (fast)', '2× (clean)', '3× (pristine)']).name('smoothing (SSAA)');
+  fCap.add(state, 'renderSmooth', ['off (fast)', '2× (clean)', '3× (pristine)', '4× (gallery)']).name('smoothing (SSAA)');
+  // Both of these are experimental quality boosts — opt-in so an unstable render
+  // doesn't silently affect your normal exports. Trial them on a short test clip first.
+  fCap.add(state, 'motionBlurSamples', { 'off (sharp)': 1, '4× (cinematic)': 4, '8× (silky)': 8 }).name('motion blur (test)').onChange(v => { state.motionBlurSamples = +v | 0; });
+  fCap.add(state, 'superDispersion').name('supersample dispersion (test)');
   fCap.add(state, 'maxQualityExport').name('★ max quality on export');
-  fCap.add(state, 'watermarkText').name('watermark');
-  fCap.add(state, 'offlineRender').name('▶ export video (offline)');
-  fCap.add(state, 'abortOfflineRender').name('■ stop render');
-  fCap.add(state, 'toggleRecord').name('● live record / stop');
+  // Note: video export now happens via the Shot Sequence "🎬 export sequence as video"
+  // button. The standalone offline render / stop / live record / watermark controls
+  // were removed at Kit's request — sequences cover all his rendering needs.
 
-  const fP = gui.addFolder('Presets');
+  const fP = gui.addFolder('Presets').close();
   presetDropdownCtrl = fP.add(state, 'currentPreset', { '—': '—' })
     .name('preset').onChange((name) => {
       if (!name || name === '—') return;
@@ -2071,18 +2862,18 @@ function rebuildSequenceGUI() {
   fP.add(state, 'clearDefaults').name('clear saved defaults');
   refreshPresetDropdown();
 
-  const fB = gui.addFolder('Bundles');
-  for (const key of Object.keys(BUNDLES)) {
-    const b = BUNDLES[key];
-    const proxy = {}; proxy[key] = () => applyBundle(key);
-    fB.add(proxy, key).name(b.label);
-  }
+  // Bundles removed at Kit's request — they didn't reload state cleanly.
+  // Use the Presets folder above to save/load custom configurations instead.
 
   const f3 = gui.addFolder('Actions');
-  f3.add(state, 'toggleEcoMode').name('⚡ eco mode / restore (E)');
-  f3.add(state, 'togglePause').name('⏯ pause / resume (P)');
+  // Eco mode lives as a FLOATING BUTTON in the top-left of the canvas (see #ecoBtn
+  // in the markup) so Kit doesn't have to scroll the GUI panel to reach it. Pause
+  // stays here since it's used less often and keyboard "P" is the fast access.
+  pauseBtnCtrl = f3.add(state, 'togglePause').name('⏯ pause (P)');
   f3.add(state, 'reset').name('reset');
+  f3.add(state, 'showDimensions').name('show dimensions overlay').onChange(updateDimensionOverlay);
   f3.add(state, 'exportSTL').name('export STL (A)');
+  f3.add(state, 'exportSpec').name('📄 export fabrication spec');
   f3.add(state, 'screenshot').name('save screenshot');
 })();
 
@@ -2094,6 +2885,7 @@ syncMaterials();
 syncShader();
 syncScene();
 syncBloom();
+syncLook();
 applyRenderQuality(state.renderQuality);
 
 // Startup: prefer user-saved defaults, then fall back to preset "1", then built-ins.
@@ -2102,19 +2894,30 @@ applyRenderQuality(state.renderQuality);
   if (saved) {
     applyPreset(saved);
     refreshPresetDropdown();
-    guiRefresh();
     setStatus('loaded saved defaults');
-    return;
+  } else {
+    const presets = loadPresets();
+    if (presets['1']) {
+      applyPreset(presets['1']);
+      state.currentPreset = '1';
+      refreshPresetDropdown();
+      setStatus('loaded preset "1"');
+    }
   }
-  const presets = loadPresets();
-  if (presets['1']) {
-    applyPreset(presets['1']);
-    state.currentPreset = '1';
-    refreshPresetDropdown();
-    guiRefresh();
-    setStatus('loaded preset "1"');
-  }
+  // Always start with H+V mirror on regardless of saved state.
+  state.mirrorLens = true;
+  state.mirrorPanel = true;
+  ledMat.uniforms.uPanelMirror.value = 1;
+  if (ledMatB) ledMatB.uniforms.uPanelMirror.value = 1;
+  rebuildLenses();
+  guiRefresh();
 })();
+
+function syncLookResolution(w, h) {
+  if (!lookPass) return;
+  lookPass.uniforms.uResolution.value.set(w, h);
+}
+syncLookResolution(window.innerWidth, window.innerHeight);
 
 window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -2122,6 +2925,7 @@ window.addEventListener('resize', () => {
   bloomPass.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  syncLookResolution(window.innerWidth, window.innerHeight);
   updateAspectOverlay();
 });
 
@@ -2328,9 +3132,11 @@ function startRecording() {
     setTimeout(() => URL.revokeObjectURL(url), 1500);
     setStatus(`video saved (${(blob.size / 1048576).toFixed(1)} MB · ${state.recAspect})`);
     recUsesOffscreen = false;
+    setBtnActive(recordBtnCtrl, false, { labelOn: '■ stop recording', labelOff: '● live record', recColour: true });
   };
   mediaRecorder.start(250);
   recStartMs = performance.now();
+  setBtnActive(recordBtnCtrl, true, { labelOn: '■ stop recording', labelOff: '● live record', recColour: true });
   if (recTimer) clearInterval(recTimer);
   recTimer = setInterval(() => {
     const s = ((performance.now() - recStartMs) / 1000).toFixed(1);
@@ -2352,6 +3158,25 @@ function toggleRecording() {
 // --- eco mode: flip live view to lowest quality when laptop chugs ---
 let ecoModeActive = false;
 let ecoPreEcoSnapshot = null;
+// Keep the floating eco-mode button visually in sync with the eco state.
+// Idempotent — safe to call from anywhere that flips ecoModeActive.
+function syncEcoBtn() {
+  const btn = document.getElementById('ecoBtn');
+  if (!btn) return;
+  const on = !!ecoModeActive;
+  btn.classList.toggle('on', on);
+  btn.textContent = on ? '✓ eco on' : '⚡ eco';
+}
+
+// Wire the floating button click + ensure the visual state matches at boot.
+(function bindEcoBtn() {
+  const btn = document.getElementById('ecoBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => toggleEcoMode());
+  // Initial sync runs after toggleEcoMode is hoisted (function decl above).
+  setTimeout(() => { try { syncEcoBtn(); } catch (_) {} }, 0);
+})();
+
 function toggleEcoMode() {
   if (!ecoModeActive) {
     // Enter eco: remember current live-quality knobs, then drop to lowest.
@@ -2377,6 +3202,7 @@ function toggleEcoMode() {
     ledMatB.uniforms.uPanelSmooth.value = 0;
     // Keep maxQualityExport on so renders still come out full quality — that's the point.
     ecoModeActive = true;
+    syncEcoBtn();
     guiRefresh();
     setStatus('⚡ eco mode ON — renders still export at max quality');
   } else {
@@ -2396,6 +3222,7 @@ function toggleEcoMode() {
     }
     ecoModeActive = false;
     ecoPreEcoSnapshot = null;
+    syncEcoBtn();
     guiRefresh();
     setStatus('eco mode OFF — live view restored');
   }
@@ -2407,6 +3234,7 @@ function setAnimPaused(paused) {
   animPaused = !!paused;
   // Reset the clock so dt doesn't jump on resume
   if (!animPaused) clock.getDelta();
+  setBtnActive(pauseBtnCtrl, animPaused, { labelOn: '✓ paused — resume (P)', labelOff: '⏯ pause (P)' });
   setStatus(animPaused ? 'animation paused · press P or click ▶ to resume' : 'animation resumed');
   guiRefresh();
 }
@@ -2491,11 +3319,18 @@ async function renderOffline(opts = {}) {
   W = W & ~1; H = H & ~1;
 
   // Supersample factor — render at ssaa×output then downscale for clean edges.
-  const ssaaMap = { 'off (fast)': 1, '2× (clean)': 2, '3× (pristine)': 3 };
+  const ssaaMap = { 'off (fast)': 1, '2× (clean)': 2, '3× (pristine)': 3, '4× (gallery)': 4 };
   const userSsaa = ssaaMap[state.renderSmooth] || 1;
   const ssaa = maxQ ? Math.max(userSsaa, 3) : userSsaa;  // max-q forces ≥3×
   const renderW = (W * ssaa) & ~1;
   const renderH = (H * ssaa) & ~1;
+
+  // Motion blur — render N sub-frames per output frame at slightly different
+  // times and average them. Big quality win on sequence exports with camera
+  // moves: the silky smear of the transition reads as proper cinematic motion
+  // blur rather than a jerk between discrete steps. 1 = off (default).
+  const mbSamples = Math.max(1, state.motionBlurSamples | 0);
+  const motionBlurOn = mbSamples > 1;
 
   let Muxer, ArrayBufferTarget;
   {
@@ -2573,8 +3408,10 @@ async function renderOffline(opts = {}) {
     });
   } catch (e) { setStatus('encoder config failed: ' + e.message); return; }
 
-  // Setup offscreen canvas for aspect crop + SSAA downscale
-  if (useOffscreen) {
+  // Setup offscreen canvas for aspect crop + SSAA downscale.
+  // Motion blur forces the offscreen accumulator regardless of aspect, since
+  // we average N sub-frames into recCanvas before encoding.
+  if (useOffscreen || motionBlurOn) {
     recCanvas.width = W; recCanvas.height = H; recUsesOffscreen = true;
     recCtx.imageSmoothingEnabled = true;
     recCtx.imageSmoothingQuality = 'high';
@@ -2607,6 +3444,12 @@ async function renderOffline(opts = {}) {
     ledMat.uniforms.uPanelSmooth.value = 1;
     ledMatB.uniforms.uPanelSmooth.value = 1;
   }
+  // Supersample dispersion is OPT-IN ONLY. It supersamples the transmission RT
+  // to 2× viewport for sharper rainbow fringes — but it can cause rendering
+  // glitches on some setups, so it's off by default and isn't pulled in by maxQ.
+  if (state.superDispersion) {
+    renderer.transmissionResolutionScale = 2.0;
+  }
   const outputAspect = W / H;
   if (useOffscreen) {
     renderer.setPixelRatio(1);
@@ -2614,6 +3457,7 @@ async function renderOffline(opts = {}) {
     composer.setPixelRatio(1);
     composer.setSize(renderW, renderH);
     bloomPass.setSize(renderW, renderH);
+    syncLookResolution(renderW, renderH);
     camera.aspect = outputAspect;
     camera.updateProjectionMatrix();
   } else if (ssaa > 1) {
@@ -2627,6 +3471,7 @@ async function renderOffline(opts = {}) {
     composer.setPixelRatio(1);
     composer.setSize(renderW, renderH);
     bloomPass.setSize(renderW, renderH);
+    syncLookResolution(renderW, renderH);
     camera.aspect = outputAspect;
     camera.updateProjectionMatrix();
   }
@@ -2672,21 +3517,68 @@ async function renderOffline(opts = {}) {
   offlineAbortRequested = false;
   setStatus(`rendering 0 / ${totalFrames}…`);
 
+  // --- Helper: draw one sub-frame from renderer.domElement onto recCanvas with
+  // a given accumulation alpha. Mirrors drawRecFrame's crop/scale logic but lets
+  // motion blur build up an averaged frame. -----------------------------------
+  function accumulateSubFrame(alpha) {
+    const src = renderer.domElement;
+    const sw = src.width, sh = src.height;
+    const dw = recCanvas.width, dh = recCanvas.height;
+    if (!sw || !sh) return;
+    const sAR = sw / sh, dAR = dw / dh;
+    let cx, cy, cw, ch;
+    if (sAR > dAR) { ch = sh; cw = sh * dAR; cx = (sw - cw) / 2; cy = 0; }
+    else           { cw = sw; ch = sw / dAR; cx = 0; cy = (sh - ch) / 2; }
+    recCtx.globalAlpha = alpha;
+    recCtx.drawImage(src, cx, cy, cw, ch, 0, 0, dw, dh);
+  }
+
   for (let i = 0; i < totalFrames; i++) {
     if (offlineAbortRequested) break;
     const t = i / fps;
-    ledMat.uniforms.uTime.value  = t;
-    ledMatB.uniforms.uTime.value = t;
-    if (useSequence) {
-      const pose = evaluateSequenceAt(t);
-      if (pose) applyPose(pose);
-    } else {
-      updateCameraMotion(1 / fps);
-    }
-    camera.updateMatrixWorld(true);
-    renderFrame();
     let src;
-    if (useOffscreen) { drawRecFrame(); src = recCanvas; } else { src = renderer.domElement; }
+
+    if (motionBlurOn) {
+      // Average mbSamples sub-frames per output frame, evenly spaced across the
+      // shutter interval [t, t + 1/fps]. Each sub-frame ticks panel time + camera
+      // pose forward by a fraction of the frame duration. The resulting blur is
+      // proportional to per-frame motion — fast camera moves smear, static
+      // shots stay sharp. Dramatically improves cinematic feel on sequences.
+      recCtx.clearRect(0, 0, recCanvas.width, recCanvas.height);
+      const subDt = 1 / (fps * mbSamples);
+      const alpha = 1 / mbSamples;
+      for (let s = 0; s < mbSamples; s++) {
+        if (offlineAbortRequested) break;
+        const subT = t + (s + 0.5) / (fps * mbSamples);
+        ledMat.uniforms.uTime.value  = subT;
+        ledMatB.uniforms.uTime.value = subT;
+        if (useSequence) {
+          const pose = evaluateSequenceAt(subT);
+          if (pose) applyPose(pose);
+        } else {
+          updateCameraMotion(subDt);
+        }
+        camera.updateMatrixWorld(true);
+        renderFrame();
+        accumulateSubFrame(alpha);
+      }
+      recCtx.globalAlpha = 1.0;
+      drawWatermark(recCtx, recCanvas.width, recCanvas.height);
+      src = recCanvas;
+    } else {
+      ledMat.uniforms.uTime.value  = t;
+      ledMatB.uniforms.uTime.value = t;
+      if (useSequence) {
+        const pose = evaluateSequenceAt(t);
+        if (pose) applyPose(pose);
+      } else {
+        updateCameraMotion(1 / fps);
+      }
+      camera.updateMatrixWorld(true);
+      renderFrame();
+      if (useOffscreen) { drawRecFrame(); src = recCanvas; } else { src = renderer.domElement; }
+    }
+
     let frame;
     try {
       frame = new VideoFrame(src, { timestamp: Math.round(t * 1_000_000) });
@@ -2765,6 +3657,7 @@ async function renderOffline(opts = {}) {
   composer.setPixelRatio(savedPixelRatio);
   composer.setSize(window.innerWidth, window.innerHeight);
   bloomPass.setSize(window.innerWidth, window.innerHeight);
+  syncLookResolution(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
 
@@ -2826,6 +3719,7 @@ function animate() {
       const last = shotSequence[shotSequence.length - 1];
       if (last) applyPose(last.pose);
       sequencePlaying = false;
+      setBtnActive(seqPlayBtnCtrl, false, { labelOn: '✓ playing — stop  [Enter]', labelOff: '▶ preview sequence  [Enter]' });
       setStatus('sequence preview complete');
     } else {
       const pose = evaluateSequenceAt(elapsed);
