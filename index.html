@@ -31,6 +31,21 @@
   #ecoBtn.on { background: #2bd672; color: #052e15; border-color: #2bd672; font-weight: 600; }
   body.render-mode #ecoBtn { display: none; }
 
+  /* Shape view button — sits next to eco. Toggles a topographic clay render
+     of the lens form for sense-checking and fabricator briefs. */
+  #shapeBtn {
+    position: fixed; top: 44px; left: 86px; z-index: 11;
+    padding: 8px 14px; border-radius: 999px; cursor: pointer; user-select: none;
+    background: rgba(28, 28, 28, 0.85); color: #aaa; border: 1px solid #333;
+    font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+  #shapeBtn:hover { color: #fff; border-color: #555; }
+  #shapeBtn.on { background: #ff8a3a; color: #1a0a00; border-color: #ff8a3a; font-weight: 600; }
+  body.render-mode #shapeBtn { display: none; }
+
   /* --- Dimension overlay (fabrication-focused) ----------------------------- */
   /* Live readout of the current lens spec — useful when liaising with the
      manufacturer or sense-checking a tweak. Toggled from Actions folder. */
@@ -49,11 +64,11 @@
   #dimPanel .row { display: flex; justify-content: space-between; gap: 18px; line-height: 1.6; }
   #dimPanel .row span:last-child { color: #fff; font-variant-numeric: tabular-nums; }
   body.render-mode #dimPanel { display: none !important; }
-  #status {
-    position: fixed; bottom: 12px; left: 80px; z-index: 10;
-    font-size: 11px; color: #888; font-family: "SF Mono", ui-monospace, Menlo, monospace;
-    max-width: 70%;
-  }
+  /* #status hidden — Kit doesn't want the bottom-of-screen "eco mode on" /
+     "preset loaded" / "render saved" chatter cluttering the canvas. The element
+     stays in the DOM so all the setStatus() calls scattered through the code
+     don't need rewriting; it's just visually invisible. */
+  #status { display: none; }
   #fps {
     position: fixed; bottom: 12px; left: 14px; z-index: 10;
     font-size: 11px; color: #888; font-family: "SF Mono", ui-monospace, Menlo, monospace;
@@ -120,12 +135,33 @@
   }
   #renderOverlay .stopBtn:hover { color: #fff; border-color: #666; }
   #renderOverlay .hint { color: #555; font-size: 11px; margin-top: 16px; letter-spacing: 0.08em; text-transform: uppercase; }
+  /* In-overlay eco render dropdown — flip throttle level mid-render so the
+     laptop can stay usable for other work while the export finishes. */
+  #renderOverlay .ecoRow {
+    display: flex; align-items: center; gap: 12px;
+    margin: 12px auto 18px auto; padding: 10px 16px; max-width: 360px;
+    background: rgba(43, 214, 114, 0.06); border: 1px solid rgba(43, 214, 114, 0.18);
+    border-radius: 999px;
+  }
+  #renderOverlay .ecoRow label {
+    color: #2bd672; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase; font-weight: 600;
+  }
+  #renderOverlay .ecoRow select {
+    appearance: none; background: rgba(20,20,20,0.7); color: #ddd;
+    border: 1px solid #333; border-radius: 4px;
+    padding: 6px 28px 6px 12px; font-family: inherit; font-size: 11px;
+    letter-spacing: 0.05em; cursor: pointer;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='none' stroke='%23888' stroke-width='1.5' d='M1 1l4 4 4-4'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  #renderOverlay .ecoRow select:hover { border-color: #555; color: #fff; }
 </style>
 </head>
 <body>
 <div id="app"></div>
-<div id="hud"><b>Prismatica V2</b> <span>— lens playground</span></div>
-<div id="ecoBtn" title="Toggle eco mode (E) — drops live-view quality so the laptop stays cool. Renders still export at full quality.">⚡ eco</div>
+<!-- HUD / floating eco + shape buttons removed at Kit's request. Eco and shape
+     toggles now live in the Actions folder; FPS is shown there too. -->
+
 <div id="dimPanel">
   <div class="heading">Dimensions</div>
   <div class="row"><span>footprint</span><span id="dimFoot">—</span></div>
@@ -143,8 +179,17 @@
     <div class="title2" id="roTitle">Rendering…</div>
     <div class="bar"><div class="barFill" id="roBarFill"></div></div>
     <div class="stats" id="roStats">preparing encoder…</div>
+    <div class="ecoRow">
+      <label for="roEcoSelect">🌱 eco render</label>
+      <select id="roEcoSelect">
+        <option value="off">off (fastest)</option>
+        <option value="light">light · ~75% load</option>
+        <option value="half-speed">half-speed · ~50% load</option>
+        <option value="gentle">gentle · ~25% load</option>
+      </select>
+    </div>
     <button class="stopBtn" id="roStopBtn">■ Stop render</button>
-    <div class="hint">keep this tab in the foreground for fastest render</div>
+    <div class="hint">eco can be changed mid-render · keep this tab in the foreground for fastest render</div>
   </div>
 </div>
 
@@ -409,6 +454,20 @@ const ledShader = {
     uHasTex:     hasTexture,
     uPgLineWidth:{ value: 0.06 },  // pixelgrid: gridline thickness as fraction of cell pitch
     uPgFlow:     { value: 0.4 },   // pixelgrid: drift speed in cells per second (real time)
+    // --- Generic per-pattern shaping uniforms ---------------------------------
+    // Reusable "knobs" for shape-based modes (wave, radial, scanlines, spiral,
+    // rings, squares, diamond bands) and the fluid shaders. Each mode interprets
+    // them in its own context-appropriate way, but the GUI labels stay consistent
+    // ("sharpness", "scale", "detail", "distortion") so the user has a stable
+    // mental model. Values normalised to [0..1] where possible so behaviour is
+    // predictable across modes.
+    uPatSharp:   { value: 0.5 },   // 0..1 — edge crispness (0 soft, 1 razor)
+    uPatScale:   { value: 1.0 },   // 0.3..4 — pattern frequency multiplier
+    uPatDetail:  { value: 0.5 },   // 0..1 — fractal octave / sub-pattern density
+    uPatDistort: { value: 0.0 },   // 0..1 — radial / sweep distortion amount
+    uPatSeed:    { value: 0.0 },   // 0..100 — random offset for noise-based modes
+    uPatAxis:    { value: 0 },     // 0=horizontal, 1=vertical, 2=diagonal (scanlines etc.)
+    uPanelContrast: { value: 1.0 },// 0.5..2.5 — global contrast applied to the final panel colour
     uPanelMirror:{ value: 0 },     // 1 = fold uv into the top-right quadrant for H+V symmetry
     uSqThickness:{ value: 0.5 },
     uSqSoftness: { value: 0.3 },
@@ -445,6 +504,13 @@ const ledShader = {
     uniform float uHueShift;
     uniform float uPgLineWidth;
     uniform float uPgFlow;
+    uniform float uPatSharp;
+    uniform float uPatScale;
+    uniform float uPatDetail;
+    uniform float uPatDistort;
+    uniform float uPatSeed;
+    uniform int   uPatAxis;
+    uniform float uPanelContrast;
     uniform int   uPanelMirror;
     uniform sampler2D uTex;
     uniform int uHasTex;
@@ -528,17 +594,57 @@ const ledShader = {
         float pixel = 1.0 - smoothstep(0.5 - lw - aa, 0.5 - lw + aa, edge);
         col = vec3(pixel);
       } else if (uMode == 2) {
-        // Continuous wave — sample uv directly so it stays smooth at deep zoom.
-        float v = 0.5 + 0.5 * sin(uv.x * 12.0 + t * 2.0) * cos(uv.y * 8.0 - t * 1.3);
-        col = hsv2rgb(vec3(fract(v + uHueShift), 0.85, v));
+        // WAVE — three-octave sine interference for richer detail. uPatScale
+        // controls overall frequency, uPatDetail mixes in higher-frequency
+        // overtones for intricacy, uPatSharp narrows the bright/dark band so
+        // dark areas become more pronounced and edges sharper.
+        float s = 1.0 + uPatScale * 1.4;
+        float a = sin(uv.x * 12.0 * s + t * 2.0) * cos(uv.y * 8.0 * s - t * 1.3);
+        float b = sin(uv.x * 22.0 * s - t * 1.5 + 1.0) * cos(uv.y * 17.0 * s + t * 0.9);
+        float c2 = sin((uv.x + uv.y) * 9.0 * s + t * 0.7) * cos((uv.x - uv.y) * 14.0 * s - t * 1.1);
+        float v = a * 0.55 + b * 0.30 * uPatDetail + c2 * 0.25 * uPatDetail;
+        v = v * 0.5 + 0.5;
+        // Sharpness band: shrinks the lit zone for crisper black backgrounds.
+        float band = mix(0.50, 0.04, clamp(uPatSharp, 0.0, 1.0));
+        v = smoothstep(0.5 - band, 0.5 + band, v);
+        col = hsv2rgb(vec3(fract(v + uHueShift + t * 0.04), 0.85, v));
       } else if (uMode == 3) {
+        // RADIAL — concentric rings with optional swirl distortion. uPatSharp
+        // narrows the band into hard ridges, uPatDistort warps the rings into
+        // a slow swirl, uPatScale changes ring count.
         vec2 c = uv - 0.5;
         float r = length(c);
-        float ringFreq = uScale * 0.6;
-        float v = 0.5 + 0.5 * sin(r * ringFreq - t * 3.0);
+        float ang = atan(c.y, c.x);
+        float swirl = uPatDistort * 4.0 * sin(ang * 3.0 + t * 0.4);
+        float ringFreq = uScale * 0.6 * (0.5 + uPatScale * 0.8);
+        float v = 0.5 + 0.5 * sin(r * ringFreq - t * 3.0 + swirl);
+        float band = mix(0.45, 0.04, clamp(uPatSharp, 0.0, 1.0));
+        v = smoothstep(0.5 - band, 0.5 + band, v);
         col = hsv2rgb(vec3(fract(r * 2.0 + uHueShift + t * 0.05), 0.85, v));
       } else if (uMode == 4) {
-        float v = 0.5 + 0.5 * sin(uv.y * 40.0 + t * 6.0);
+        // SCANLINES — sharp parallel bands. uPatAxis selects:
+        //   0 = horizontal lines (current default)
+        //   1 = vertical lines
+        //   2 = diagonal /
+        //   3 = anti-diagonal \
+        //   4 = X-split (lens-aligned): vertical lines on the side triangles
+        //       (where |x| > |y|), horizontal lines on the top/bottom triangles
+        //       (where |y| > |x|). The X-boundary lines up with the X-shape the
+        //       lens optically draws on the panel — scan lines all "point inward"
+        //       toward the centre.
+        //   5 = X-split inverted: horizontal on sides, vertical on top/bottom.
+        vec2 c = uv - 0.5;
+        float coord;
+        if      (uPatAxis == 1) coord = uv.x;
+        else if (uPatAxis == 2) coord = (uv.x + uv.y) * 0.7071;
+        else if (uPatAxis == 3) coord = (uv.x - uv.y) * 0.7071;
+        else if (uPatAxis == 4) coord = (abs(c.x) > abs(c.y)) ? uv.x : uv.y;
+        else if (uPatAxis == 5) coord = (abs(c.x) > abs(c.y)) ? uv.y : uv.x;
+        else                    coord = uv.y;
+        float freq = 40.0 * (0.4 + uPatScale * 1.2);
+        float v = 0.5 + 0.5 * sin(coord * freq + t * 6.0);
+        float band = mix(0.45, 0.03, clamp(uPatSharp, 0.0, 1.0));
+        v = smoothstep(0.5 - band, 0.5 + band, v);
         col = vec3(v, v * 0.6, v * 0.3);
       } else if (uMode == 5) {
         vec2 q = px + floor(t * 6.0);
@@ -561,26 +667,34 @@ const ledShader = {
         vec3 tint = hsv2rgb(vec3(fract(h * 2.0 + uHueShift), 0.5, 1.0));
         col = brightness * mix(vec3(1.0), tint, 0.5);
       } else if (uMode == 10) {
-        // SPIRAL — galactic arms with hard, narrow ridges. Sharper than the old
-        // soft-falloff version: uses fwidth-AA on a tight smoothstep band so the
-        // arms read as crisp lines, not glowing smears.
+        // SPIRAL — galactic arms. uPatDetail controls arm count (2..8),
+        // uPatDistort adds chromatic-twist that smears arms into longer streaks,
+        // uPatSharp narrows ridges into hard lines.
         vec2 c = uv - 0.5;
         float r = length(c);
         float a = atan(c.y, c.x);
-        float arms = 3.0;
-        float spiral = sin(a * arms + log(r + 0.01) * 9.0 - t * 1.8);
-        float aa = fwidth(spiral) * 1.5;
-        // Narrow band + hard edges: arm is "lit" only at sin near 1.
-        float arm = smoothstep(0.55 - aa, 0.55 + aa, spiral) * smoothstep(0.65, 0.0, r);
+        float arms = floor(2.0 + uPatDetail * 6.0);
+        float twist = 9.0 * (0.4 + uPatScale * 1.3);
+        float warp = uPatDistort * 2.0 * sin(a * arms * 0.5 + t * 0.4);
+        float spiral = sin(a * arms + log(r + 0.01) * twist - t * 1.8 + warp);
+        float band = mix(0.45, 0.03, clamp(uPatSharp, 0.0, 1.0));
+        float arm = smoothstep(0.5 - band, 0.5 + band, spiral * 0.5 + 0.5) * smoothstep(0.65, 0.0, r);
         float core = smoothstep(0.05, 0.0, r) * 1.4;
         float hue = fract(0.62 + r * 0.6 + uHueShift);
         col = hsv2rgb(vec3(hue, 0.85, arm)) + vec3(1.0, 0.85, 0.6) * core;
       } else if (uMode == 11) {
+        // RINGS — concentric rings with optional petal-distortion (uPatDistort
+        // warps them into flower-like shapes). uPatSharp narrows bands into
+        // hard ridges. uPatScale tunes ring density.
         vec2 c = uv - 0.5;
         float r = length(c);
-        float freq = uScale * 1.2;
-        float rings = sin(r * freq - t * 4.0);
-        float v = smoothstep(0.0, 0.9, rings);
+        float ang = atan(c.y, c.x);
+        float petals = floor(3.0 + uPatDetail * 9.0);
+        float distort = uPatDistort * 0.18 * sin(ang * petals + t * 0.4);
+        float freq = uScale * 1.2 * (0.5 + uPatScale * 1.0);
+        float rings = sin((r + distort) * freq - t * 4.0);
+        float band = mix(0.45, 0.03, clamp(uPatSharp, 0.0, 1.0));
+        float v = smoothstep(0.5 - band, 0.5 + band, rings * 0.5 + 0.5);
         float hue = fract(r * 4.0 + t * 0.12 + uHueShift);
         col = hsv2rgb(vec3(hue, 0.9, v));
       } else if (uMode == 12) {
@@ -596,15 +710,26 @@ const ledShader = {
         float v = smoothstep(0.55 - aa, 0.55 + aa, ray) * smoothstep(0.55, 0.0, r);
         col = hsv2rgb(vec3(fract(a / 6.2832 + t * 0.1 + uHueShift), 0.85, v));
       } else if (uMode == 13) {
-        vec2 c = abs(uv - 0.5);
-        float d = max(c.x, c.y);
-        float freq = uScale * 0.5;
+        // SQUARES — concentric Chebyshev ring bands with new generic knobs.
+        // uPatSharp now controls edge crispness, uPatScale tunes ring density,
+        // uPatDistort warps the squares into rounded shapes (corner softening),
+        // uPatDetail mixes a secondary high-frequency banding for richer feel.
+        vec2 cAbs = abs(uv - 0.5);
+        // Distortion blends Chebyshev (square rings) toward Euclidean (circular):
+        //   uPatDistort = 0 → max(|x|,|y|) hard squares
+        //   uPatDistort = 1 → length(c) full circles
+        float dSq = max(cAbs.x, cAbs.y);
+        float dCr = length(cAbs);
+        float d = mix(dSq, dCr, clamp(uPatDistort, 0.0, 1.0));
+        float freq = uScale * 0.5 * (0.4 + uPatScale * 1.3);
         float phase = d * freq - t * 3.0 * uSqDir;
-        // triangular wave in [0,1], symmetric band profile
         float tri = 1.0 - abs(fract(phase / 6.2831853) * 2.0 - 1.0);
-        // duty cycle via uSqThickness (0 = thin line, 1 = mostly filled)
-        float halfWidth = clamp(uSqThickness, 0.02, 0.98);
-        float soft = clamp(uSqSoftness, 0.0, 1.0) * 0.5 + 0.001;
+        // Mix in a secondary higher-frequency band for detail.
+        float tri2 = 1.0 - abs(fract(phase * 3.0 / 6.2831853) * 2.0 - 1.0);
+        tri = mix(tri, tri * tri2, clamp(uPatDetail, 0.0, 1.0) * 0.6);
+        // Sharpness: narrow lit zone → fatter black gaps + crisper edges.
+        float halfWidth = mix(0.7, 0.08, clamp(uPatSharp, 0.0, 1.0));
+        float soft = mix(0.2, 0.005, clamp(uPatSharp, 0.0, 1.0));
         float edge = smoothstep(halfWidth - soft, halfWidth, tri);
         if (uSqGrad == 1) {
           // Sample a 3-stop gradient (A→B→C→A) along the chosen axis.
@@ -650,46 +775,54 @@ const ledShader = {
           col = hsv2rgb(vec3(h, s, v));
         }
       } else if (uMode == 14) {
-        // LIQUID IRIDESCENCE — domain-warped FBM with iridescent palette,
-        // tuned for high contrast through the acrylic. Now has proper black
-        // areas (where the FBM dips low) so the lens has dark zones to refract
-        // against, instead of one uniform pastel wash.
-        vec2 q = uv * 2.0 - 1.0;
+        // LIQUID IRIDESCENCE — domain-warped FBM. uPatScale tunes overall
+        // scale, uPatDetail controls how many warp stages (intricacy), uPatSeed
+        // shifts the noise field for a fresh look. uPatSharp drives contrast.
+        float scl = 0.7 + uPatScale * 1.6;
+        vec2 q = (uv * 2.0 - 1.0) * scl + vec2(uPatSeed * 0.31, uPatSeed * 0.47);
         float tt = t * 0.18;
         vec2 w1 = vec2(fbm(q + vec2(0.0, 0.0) + tt), fbm(q + vec2(5.2, 1.3) + tt));
         vec2 w2 = vec2(fbm(q + 4.0 * w1 + vec2(1.7, 9.2) + tt * 0.7),
                        fbm(q + 4.0 * w1 + vec2(8.3, 2.8) + tt * 0.7));
-        float v = fbm(q + 4.0 * w2);
-        // Iridescent palette: cycles through the full spectrum
+        // Detail mixes a third warp stage for higher intricacy at high uPatDetail.
+        vec2 w3 = vec2(fbm(q + 6.0 * w2 + vec2(11.1, 3.3) + tt * 0.5),
+                       fbm(q + 6.0 * w2 + vec2(2.9, 7.7) - tt * 0.5));
+        vec2 wF = mix(w2, w3, clamp(uPatDetail, 0.0, 1.0));
+        float v = fbm(q + 4.0 * wF);
         vec3 a = vec3(0.5, 0.5, 0.5);
         vec3 b = vec3(0.5, 0.5, 0.5);
         vec3 c = vec3(1.0, 1.0, 1.0);
         vec3 d = vec3(0.0, 0.33, 0.67);
         vec3 hue = iqPalette(v + uHueShift + t * 0.02, a, b, c, d);
-        // Contrast curve: dark FBM zones go to true black, mid zones still
-        // saturate. Pow(2.2) deepens shadows; smoothstep clamps below 0.2.
-        float mask = smoothstep(0.18, 0.85, v);
+        float lo = mix(0.30, 0.05, clamp(uPatSharp, 0.0, 1.0));
+        float hi = mix(0.70, 0.95, clamp(uPatSharp, 0.0, 1.0));
+        float mask = smoothstep(lo, hi, v);
         col = hue * pow(mask, 1.4);
       } else if (uMode == 15) {
-        // PLASMA AURORA — flowing curtains of multi-frequency colour.
-        // Soft vertical drift, slow phase shift, rich reds-purples-cyans.
-        vec2 q = uv * 2.0 - 1.0;
+        // PLASMA AURORA — flowing curtains. uPatScale tunes the band frequency,
+        // uPatDetail mixes more octaves for intricacy, uPatSeed shifts the
+        // pattern for a randomized look.
+        float scl = 0.6 + uPatScale * 1.4;
+        vec2 q = (uv * 2.0 - 1.0) * scl + vec2(uPatSeed * 0.21, -uPatSeed * 0.13);
         float band = sin(q.x * 4.0 + sin(q.y * 2.5 + t * 0.22) * 1.5 + t * 0.13);
         band += sin(q.x * 7.0 - q.y * 3.0 + t * 0.18) * 0.5;
         band += sin(length(q) * 6.0 - t * 0.15) * 0.3;
+        // Detail injects higher-frequency overtones.
+        band += sin(q.x * 14.0 + q.y * 9.0 - t * 0.25) * 0.35 * clamp(uPatDetail, 0.0, 1.0);
+        band += cos(q.y * 18.0 + t * 0.20) * 0.25 * clamp(uPatDetail, 0.0, 1.0);
         band = band * 0.5 + 0.5;
-        float intensity = pow(band, 1.4);
-        // Aurora palette: deep violets / magentas / cyans
+        float intensity = pow(band, mix(1.4, 3.0, clamp(uPatSharp, 0.0, 1.0)));
         vec3 a = vec3(0.45, 0.30, 0.55);
         vec3 b = vec3(0.55, 0.50, 0.45);
         vec3 c = vec3(1.0, 1.1, 0.9);
         vec3 d = vec3(0.10, 0.20, 0.30);
         col = iqPalette(intensity + uHueShift + t * 0.04, a, b, c, d) * intensity;
       } else if (uMode == 16) {
-        // BUBBLE FLOW — animated voronoi cellular noise, now with proper black
-        // gaps between bubbles. The lens loves contrasty input — bright bubbles
-        // against pure black gives the most dramatic refraction.
-        vec2 q = uv * 4.0;
+        // BUBBLE FLOW — voronoi cells. uPatScale = bubble density, uPatDetail
+        // adds a sub-bubble micro-structure, uPatSeed shifts the cell pattern,
+        // uPatSharp narrows the bright cores into harder edges.
+        float scl = 2.0 + uPatScale * 4.0;
+        vec2 q = uv * scl + vec2(uPatSeed * 1.3, uPatSeed * 0.7);
         vec2 ip = floor(q);
         vec2 fp = fract(q);
         float minD1 = 8.0;
@@ -704,28 +837,31 @@ const ledShader = {
             else if (dist < minD2) { minD2 = dist; }
           }
         }
-        // Bubble core mask: bright at the centre, hard transition to black
-        // between bubbles via smoothstep on the inverted minD1 distance.
-        float core = smoothstep(0.55, 0.05, minD1);          // inside the bubble
-        float seam = smoothstep(0.0, 0.04, minD2 - minD1);   // bright edge along seam
+        float coreEdge = mix(0.55, 0.30, clamp(uPatSharp, 0.0, 1.0));
+        float core = smoothstep(coreEdge, 0.05, minD1);
+        float seam = smoothstep(0.0, 0.04, minD2 - minD1);
+        // Detail: sub-pattern multiplied in for richer bubble interiors.
+        float micro = mix(1.0, 0.5 + 0.5 * sin(minD1 * 26.0 + t * 0.4), clamp(uPatDetail, 0.0, 1.0) * 0.8);
         vec3 a = vec3(0.5, 0.4, 0.6);
         vec3 b = vec3(0.5, 0.5, 0.5);
         vec3 c = vec3(1.0, 1.0, 1.0);
         vec3 d = vec3(0.30, 0.50, 0.80);
         vec3 fill = iqPalette(minD1 * 1.5 + uHueShift + t * 0.03, a, b, c, d);
-        col = fill * core * seam;
+        col = fill * core * seam * micro;
       } else if (uMode == 17) {
-        // LIQUID MERCURY — three-layer FBM stacked at different scales, now
-        // with true black areas. The previous version had a 0.4 ambient floor
-        // that made the whole panel read as flat-white through the lens. Now
-        // the dark FBM zones go to deep black and only the bright lobes glow.
-        vec2 q = uv * 1.5 - 0.75;
+        // LIQUID MERCURY — multi-layer FBM. uPatScale = pattern scale,
+        // uPatDetail = layer count, uPatSeed = field offset for randomization.
+        float scl = 0.8 + uPatScale * 1.5;
+        vec2 q = (uv * 1.5 - 0.75) * scl + vec2(uPatSeed * 0.41, uPatSeed * 0.27);
         float n1 = fbm(q * 1.5 + vec2(t * 0.04, t * 0.025));
         float n2 = fbm(q * 4.0 + vec2(-t * 0.03, t * 0.05) + n1 * 0.7);
         float n3 = fbm(q * 9.0 + n2 * 1.5);
-        float v = n1 * 0.55 + n2 * 0.30 + n3 * 0.15;
-        // High-contrast curve: black up to v=0.35, ramp to bright by 0.85.
-        float lit = smoothstep(0.32, 0.85, v);
+        // Detail: extra octave at very high detail for crystalline crispness.
+        float n4 = fbm(q * 18.0 + n3 * 0.5) * clamp(uPatDetail, 0.0, 1.0);
+        float v = n1 * 0.55 + n2 * 0.30 + n3 * 0.15 + n4 * 0.20;
+        float liftLo = mix(0.40, 0.20, clamp(uPatSharp, 0.0, 1.0));
+        float liftHi = mix(0.92, 0.78, clamp(uPatSharp, 0.0, 1.0));
+        float lit = smoothstep(liftLo, liftHi, v);
         vec3 base = vec3(0.65, 0.72, 0.88) * lit * 1.5;
         vec3 a = vec3(0.5, 0.5, 0.5);
         vec3 b = vec3(0.5, 0.5, 0.5);
@@ -734,18 +870,20 @@ const ledShader = {
         vec3 sheen = iqPalette(v * 1.5 + uHueShift + t * 0.025, a, b, c, d);
         col = mix(base, base * sheen * 1.7, 0.6);
       } else if (uMode == 18) {
-        // CAUSTICS — water-light through a rippling pool. Now pure-black between
-        // ridges (no 0.15 ambient floor), so the lens has clean dispersion zones
-        // and the caustic veins read like real light through water.
-        vec2 p = uv * 3.0;
-        float ts = t * 0.25;
+        // CAUSTICS. uPatScale = pattern scale, uPatDetail = warp depth,
+        // uPatSharp = ridge crispness, uPatSeed = field offset.
+        float scl = 1.5 + uPatScale * 2.5;
+        vec2 p = uv * scl + vec2(uPatSeed * 0.51, -uPatSeed * 0.29);
+        float ts = t * 0.08;  // in-shader time multiplier for caustics — slow / meditative
         vec2 q = vec2(fbm(p + vec2(0.0, ts)), fbm(p + vec2(5.2, -ts)));
         vec2 r = vec2(fbm(p + 4.0 * q + vec2(1.7, 9.2) + ts * 0.5),
                       fbm(p + 4.0 * q + vec2(8.3, 2.8) - ts * 0.5));
-        float f = fbm(p + 4.0 * r);
-        // Sharper ridges via a higher power. Ridge approaches 1 only near the
-        // peak of the FBM, otherwise quickly drops to 0 — gives clean dark gaps.
-        float ridge = pow(1.0 - abs(f - 0.5) * 2.0, 6.0);
+        // Detail: deeper warp stages for more curling complexity.
+        vec2 r2 = vec2(fbm(p + 6.0 * r + vec2(2.0, 5.5)), fbm(p + 6.0 * r + vec2(11.0, 1.0)));
+        vec2 rF = mix(r, r2, clamp(uPatDetail, 0.0, 1.0));
+        float f = fbm(p + 4.0 * rF);
+        float ridgePow = mix(3.0, 10.0, clamp(uPatSharp, 0.0, 1.0));
+        float ridge = pow(1.0 - abs(f - 0.5) * 2.0, ridgePow);
         vec3 a = vec3(0.5, 0.55, 0.6);
         vec3 b = vec3(0.5, 0.45, 0.4);
         vec3 c = vec3(1.0, 1.0, 0.9);
@@ -758,7 +896,7 @@ const ledShader = {
         // High contrast, very slow, "bulgy" silk-grid look. uPgLineWidth controls
         // line thickness, uPgFlow / panel speed slider control drift rate.
         vec2 q = uv * 2.0 - 1.0;
-        float ts = t * 0.06;  // slow base flow
+        float ts = t * 0.015;  // very slow base flow — barely-perceptible silk drift
         float wx = fbm(q * 0.55 + vec2(ts, 0.0)) - 0.5;
         float wy = fbm(q * 0.55 + vec2(0.0, ts + 5.2)) - 0.5;
         vec2 warpedUv = uv + vec2(wx, wy) * 0.22;
@@ -786,17 +924,22 @@ const ledShader = {
         float lineY = 1.0 - smoothstep(0.5 - lw - aaY, 0.5 - lw + aaY, fc.y);
         col = vec3(max(lineX, lineY));
       } else if (uMode == 21) {
-        // DIAMOND BANDS — concentric square (Chebyshev) rings rotating extremely
-        // slowly. Hard band edges via smoothstep on the derivative. The slow
-        // rotation makes the diamond shape sweep imperceptibly, very meditative.
+        // DIAMOND BANDS — Chebyshev rings, slowly rotating. uPatScale tunes
+        // ring density, uPatSharp narrows bright rings into harder edges,
+        // uPatDistort blends toward circular rings.
         vec2 c = (uv - 0.5) * 2.0;
-        float a = t * 0.025;  // ~1 full rotation every ~250s — barely perceptible
+        float a = t * 0.025;
         float ca = cos(a), sa = sin(a);
         vec2 r = vec2(c.x * ca - c.y * sa, c.x * sa + c.y * ca);
-        float d = max(abs(r.x), abs(r.y));
-        float bands = sin(d * uScale * 1.2 - t * 0.4);
+        float dSq = max(abs(r.x), abs(r.y));
+        float dCr = length(r);
+        float d = mix(dSq, dCr, clamp(uPatDistort, 0.0, 1.0));
+        float freqMul = 0.5 + uPatScale * 1.5;
+        float bands = sin(d * uScale * 1.2 * freqMul - t * 0.4);
         float aa = fwidth(bands);
-        float v = smoothstep(-aa, aa, bands);
+        // Sharp narrows the lit band; soft makes it broader.
+        float band = mix(aa * 4.0, aa * 0.5, clamp(uPatSharp, 0.0, 1.0));
+        float v = smoothstep(-band, band, bands);
         col = vec3(v);
       }
       return col;
@@ -819,6 +962,12 @@ const ledShader = {
         );
       } else {
         col = computeLedColor(vUv, t);
+      }
+      // Panel-side contrast — pivots around 0.5 so blacks deepen and highlights
+      // brighten symmetrically. Applied BEFORE brightness so the contrast knob
+      // is independent of overall panel intensity.
+      if (uPanelContrast != 1.0) {
+        col = (col - 0.5) * uPanelContrast + 0.5;
       }
       col *= uBrightness;
       gl_FragColor = vec4(col, 1.0);
@@ -951,22 +1100,53 @@ const LENS_TYPES = {
   stepped_ripple: {
     label: 'Stepped Ripple',
     params: {
-      wavelength: { value: 42,  min: 20, max: 200, step: 1 },
-      amplitude:  { value: 100, min: 0,  max: 200, step: 1 },   // central peak height (mm)
-      step:       { value: 10,  min: 0,  max: 60,  step: 0.5 }, // mm drop per ripple
+      wavelength: { value: 42,   min: 20,   max: 200, step: 1 },
+      amplitude:  { value: 100,  min: 0,    max: 200, step: 1, label: 'central peak (mm)' },
+      step:       { value: 10,   min: 0,    max: 60,  step: 0.5, label: 'drop per ripple (mm)' },
+      // edgeFade: ratio of the panel's short side that fades to flat at the
+      // rim. 0 = ripples run all the way to the edge (sharp termination, may
+      // look harsh and create un-refracted slivers if the wave isn't at zero).
+      // 0.5 = the middle of the panel is flat-zero except for a brief peak.
+      // Lower this to make the ripples WIDER / cover more of the slab.
+      edgeFade:   { value: 0.18, min: 0.0,  max: 0.5, step: 0.005, label: 'edge fade (0=widest)' },
+      // bumpSharp: 0..1 slider mapped to a dramatic shape transform.
+      //   0.0 = flat-topped ridges with steep walls (like rounded square wave)
+      //   0.5 = default cosine (smooth sinusoidal bumps)
+      //   1.0 = sharp narrow spikes with broad flat troughs
+      // Implemented as a smoothstep contrast on the wave, which gives a clearly
+      // visible transformation across the whole slider range.
+      bumpSharp:  { value: 0.5,  min: 0.0,  max: 1.0, step: 0.01, label: 'bump shape' },
     },
-    // Stepped concentric ripples — the central peak is the tallest, and each
-    // successive ring is `step` mm shorter than the one inside it. Ripples now
-    // cover the full panel rectangle (not just an inscribed circle) and fade
-    // smoothly to flat near each panel edge, so there are no flat corners on
-    // the lens for un-refracted light to leak through.
+    // Stepped concentric ripples covering the full panel rectangle. Ripples now
+    // cover the whole slab, fading smoothly to flat in a controllable margin
+    // near each panel edge.
     fn: (p, W, H) => {
       const TAU = Math.PI * 2;
       const halfW = W * 0.5, halfH = H * 0.5;
       const wl   = Math.max(1, p.wavelength);
       const amp  = p.amplitude;
       const step = p.step != null ? p.step : 10;
-      const margin = Math.min(W, H) * 0.18;
+      const fadeRatio = p.edgeFade != null ? p.edgeFade : 0.18;
+      const sharp = p.bumpSharp != null ? p.bumpSharp : 0.5;
+      const margin = Math.max(0.0001, Math.min(W, H) * fadeRatio);
+      // Map slider 0..1 to a clearly-visible bump shape transform:
+      //   0.0 = wide flat plateaus (rounded-square wave)
+      //   0.5 = pass-through cosine
+      //   1.0 = sharp narrow spikes with flat troughs
+      // Uses symmetric pow-based reshape: plateau side is `1 - (1-v)^n`,
+      // spike side is `v^n`, with n growing from 1 → 5 as the slider moves
+      // away from the centre. Test value at mid-slope (v=0.5):
+      //   sharp 0.0 → 0.97   sharp 0.5 → 0.50   sharp 1.0 → 0.03
+      // ~32× dynamic range, so any slider movement produces an obvious change.
+      const reshape = (v) => {
+        if (sharp === 0.5) return v;
+        if (sharp > 0.5) {
+          const n = 1 + (sharp - 0.5) * 8;
+          return Math.pow(v, n);
+        }
+        const n = 1 + (0.5 - sharp) * 8;
+        return 1 - Math.pow(1 - v, n);
+      };
       return (x, y) => {
         const dx = halfW - Math.abs(x);
         const dy = halfH - Math.abs(y);
@@ -975,7 +1155,8 @@ const LENS_TYPES = {
         const env = d >= margin ? 1 : 0.5 * (1 - Math.cos(Math.PI * (d / margin)));
         const r = Math.hypot(x, y);
         const ampLocal = Math.max(0, amp - step * (r / wl));
-        const wave = 0.5 * (1 + Math.cos(TAU * r / wl));
+        const waveRaw = 0.5 * (1 + Math.cos(TAU * r / wl));
+        const wave = reshape(waveRaw);
         return ampLocal * wave * env;
       };
     },
@@ -1403,6 +1584,79 @@ function makeLensMaterial() {
 const lensMaterial  = makeLensMaterial();
 const lensMaterialB = makeLensMaterial();
 
+// --- Shape-view material -----------------------------------------------------
+// Opaque matte "clay" with topographic colour ramp + contour lines for sense-
+// checking the lens form. Toggled via the floating 🗺 shape view button. Reads
+// like a topo map — gradient encodes height (cool=low, warm=high), thin dark
+// lines mark every Nmm of elevation, Lambert shading shows the silhouette
+// clearly. Used both for me sense-checking my own work and for sending to
+// fabricators alongside the STL so they can read the geometry at a glance.
+const shapeViewMaterial = new THREE.ShaderMaterial({
+  uniforms: {
+    uLightDir:        { value: new THREE.Vector3(0.3, 0.6, 1.0).normalize() },
+    uContourInterval: { value: 5.0 },     // mm between contour lines
+    uHeightRange:     { value: 100.0 },   // mm; colour ramp spans 0..uHeightRange
+  },
+  vertexShader: /* glsl */`
+    varying vec3 vWorldPos;
+    varying vec3 vWorldNormal;
+    void main() {
+      vec4 wp = modelMatrix * vec4(position, 1.0);
+      vWorldPos = wp.xyz;
+      vWorldNormal = normalize(mat3(modelMatrix) * normal);
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `,
+  fragmentShader: /* glsl */`
+    precision highp float;
+    varying vec3 vWorldPos;
+    varying vec3 vWorldNormal;
+    uniform vec3 uLightDir;
+    uniform float uContourInterval;
+    uniform float uHeightRange;
+
+    // Cool→warm 4-stop gradient. Reads as a topo map at a glance.
+    vec3 heightRamp(float t) {
+      t = clamp(t, 0.0, 1.0);
+      vec3 c0 = vec3(0.07, 0.12, 0.30);   // deep blue (lowest)
+      vec3 c1 = vec3(0.18, 0.55, 0.65);   // teal
+      vec3 c2 = vec3(0.95, 0.75, 0.30);   // warm gold
+      vec3 c3 = vec3(1.00, 0.45, 0.20);   // orange (highest)
+      if (t < 0.33) return mix(c0, c1, t / 0.33);
+      if (t < 0.66) return mix(c1, c2, (t - 0.33) / 0.33);
+      return mix(c2, c3, (t - 0.66) / 0.34);
+    }
+
+    void main() {
+      vec3 N = normalize(vWorldNormal);
+      vec3 L = normalize(uLightDir);
+      // Lambert shading with a soft ambient floor so dark sides still read.
+      float diffuse = mix(0.35, 1.0, max(0.0, dot(N, L)));
+
+      // Height ramp colour
+      float h = max(0.0, vWorldPos.z);
+      vec3 base = heightRamp(h / uHeightRange);
+
+      // Contour lines: thin dark bands at every uContourInterval mm of elevation.
+      // Antialiased via fwidth on the height-derivative so lines stay clean at
+      // any zoom or grazing angle.
+      float bands = h / uContourInterval;
+      float aa = fwidth(bands);
+      float fr = abs(fract(bands) - 0.5);
+      float contour = smoothstep(aa, aa * 2.5, fr);
+      // Major lines every 5th contour, slightly stronger.
+      float bandsMaj = h / (uContourInterval * 5.0);
+      float aaMaj = fwidth(bandsMaj);
+      float frMaj = abs(fract(bandsMaj) - 0.5);
+      float major = smoothstep(aaMaj * 0.5, aaMaj * 2.0, frMaj);
+
+      vec3 col = base * diffuse * (0.55 + contour * 0.45) * (0.7 + major * 0.3);
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+  side: THREE.DoubleSide,
+});
+
 let lensMesh = null, lensMeshB = null;
 
 // -------------------------------------------------------------------------
@@ -1414,6 +1668,8 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   panelHeight: 600,
   resolution: 1.0,
   smoothing: 1,
+  shapeScale: 1.0,        // scales lens height-fn input coords. <1 stretches features outward
+                          // to fill the slab (less flat margin); >1 compresses inward.
   params: {},
   ior: 1.49,
   dispersion: 0.0,
@@ -1428,6 +1684,15 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   panelDistance: 30,
   pgLineWidth: 0.06,   // pixelgrid: black gridline thickness (fraction of cell pitch)
   pgFlow: 0.12,        // pixelgrid: drift speed (cells/sec). Default = barely-perceptible drift.
+  // --- Generic per-pattern shaping state. Each panel mode interprets these in
+  // its own context-appropriate way. Hidden/shown per-mode in the GUI.
+  patSharp:   0.5,     // 0..1 — edge crispness
+  patScale:   1.0,     // 0.3..4 — pattern frequency multiplier
+  patDetail:  0.5,     // 0..1 — fractal/sub-pattern density
+  patDistort: 0.0,     // 0..1 — radial / sweep distortion
+  patSeed:    0.0,     // 0..100 — random offset for noise modes
+  patAxis:    0,       // 0=horizontal, 1=vertical, 2=diagonal (scanlines)
+  panelContrast: 1.0,  // 0.5..2.5 — global panel contrast around mid-grey
   mirrorLens: true,    // fold lens height field into first quadrant for H+V symmetry
   mirrorPanel: true,   // fold panel UV into first quadrant for H+V symmetry
   sqThickness: 0.5,
@@ -1452,6 +1717,7 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   renderSmooth: '2× (clean)',
   motionBlurSamples: 1,           // 1 = off, 4/8 = N sub-frames per output frame averaged for cinematic motion blur
   superDispersion: false,         // export-time supersample of the transmission RT for sharper rainbow refraction
+  ecoRender: 'off',               // pause between frames during offline render so the laptop stays usable
   maxQualityExport: true,
   watermarkText: '',
   autoOrbit: false,
@@ -1475,7 +1741,10 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   lookSharpen:    0.0,
   lookLutMix:     1.0,
   lookLutName:    '',     // display only — name of currently loaded LUT
-  showDimensions: true,   // dimension overlay visible (fabrication readout)
+  showDimensions: false,  // dimension overlay hidden by default — toggle from Actions when needed
+  shapeView: false,       // matte topographic render of the lens form (instead of glass)
+  ecoModeFlag: false,     // mirror of ecoModeActive for GUI binding (auto-synced)
+  fpsText: '— fps',       // live readout shown in Actions folder
   bloomStrength: 0.5,
   bloomRadius: 0.7,
   bloomThreshold: 0.82,
@@ -1559,6 +1828,16 @@ function withMirror(fn, on) {
   return (x, y) => fn(Math.abs(x), Math.abs(y));
 }
 
+// Scale the lens-fn input coordinates. scale<1 zooms IN on the centre of the
+// height field, stretching features outward so they fill more of the slab and
+// reduce the flat margin at the edges. scale>1 compresses features inward,
+// adding more flat margin around them. Applied universally to every lens type.
+function withShapeScale(fn, scale) {
+  if (!scale || scale === 1) return fn;
+  const s = scale;
+  return (x, y) => fn(x * s, y * s);
+}
+
 // Recompute the dimension overlay panel from the current state. Walks the
 // lens height field at a coarse grid (4 mm step) to find peak height and
 // integrate volume, so the on-screen mass estimate matches reality. Cheap —
@@ -1571,7 +1850,7 @@ function updateDimensionOverlay() {
   try {
     const W = state.panelWidth, H = state.panelHeight;
     const type = LENS_TYPES[state.lensType];
-    const heightFn = withMirror(type.fn(state.params, W, H), state.mirrorLens);
+    const heightFn = withShapeScale(withMirror(type.fn(state.params, W, H), state.mirrorLens), state.shapeScale);
     const step = 4.0;
     let maxZ = 0, volR = 0;
     const cell = step * step;
@@ -1599,7 +1878,7 @@ function updateDimensionOverlay() {
 function rebuildLenses() {
   if (lensMesh) { lensMesh.geometry.dispose(); scene.remove(lensMesh); }
   const typeA = LENS_TYPES[state.lensType];
-  const hA = withMirror(typeA.fn(state.params, state.panelWidth, state.panelHeight), state.mirrorLens);
+  const hA = withShapeScale(withMirror(typeA.fn(state.params, state.panelWidth, state.panelHeight), state.mirrorLens), state.shapeScale);
   const geoA = makeLensGeometry(hA, state.panelWidth, state.panelHeight, state.resolution, state.thickness, state.smoothing);
   lensMesh = new THREE.Mesh(geoA, lensMaterial);
   scene.add(lensMesh);
@@ -1621,7 +1900,7 @@ function rebuildLenses() {
 
     if (lensMeshB) { lensMeshB.geometry.dispose(); scene.remove(lensMeshB); }
     const typeB = LENS_TYPES[state.lensTypeB];
-    const hB = withMirror(typeB.fn(state.paramsB, state.panelWidth, state.panelHeight), state.mirrorLens);
+    const hB = withShapeScale(withMirror(typeB.fn(state.paramsB, state.panelWidth, state.panelHeight), state.mirrorLens), state.shapeScale);
     const geoB = makeLensGeometry(hB, state.panelWidth, state.panelHeight, state.resolution, state.thicknessB, state.smoothing);
     lensMeshB = new THREE.Mesh(geoB, lensMaterialB);
     lensMeshB.position.set(offsetX, 0, 0);
@@ -1651,6 +1930,10 @@ function rebuildLenses() {
     setStatus(`${typeA.label}  ·  ${state.panelWidth}×${state.panelHeight} mm  ·  ${(geoA.attributes.position.count).toLocaleString()} verts`);
   }
   updateDimensionOverlay();
+  // Re-apply shape view if it was active — the rebuild just gave us a fresh
+  // mesh with the regular glass material, so the topo render needs to be
+  // re-bound to the new mesh.
+  if (state.shapeView && typeof applyShapeView === 'function') applyShapeView(true);
 }
 
 // -------------------------------------------------------------------------
@@ -1865,9 +2148,10 @@ function savePresets(obj) { localStorage.setItem(PRESET_KEY, JSON.stringify(obj)
 function presetSnapshot() {
   const s = {};
   for (const k of [
-    'lensType','panelWidth','panelHeight','resolution','smoothing','params',
+    'lensType','panelWidth','panelHeight','resolution','smoothing','shapeScale','params',
     'ior','dispersion','thickness','roughness','tint',
-    'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelDistance','pgLineWidth','pgFlow','mirrorPanel','mirrorLens',
+    'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelDistance','pgLineWidth','pgFlow',
+    'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
     'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
     'sqGradient','sqGradA','sqGradB','sqGradC','sqGradAxis','sqGradScale','sqGradFlow',
     'bgColor','bloomEnabled','bloomStrength','bloomRadius','bloomThreshold','lensSpin',
@@ -1885,6 +2169,14 @@ function applyPreset(p) {
   if (!('bloomEnabled' in p)) state.bloomEnabled = false;
   if (!('pgLineWidth' in p)) state.pgLineWidth = 0.06;
   if (!('pgFlow' in p)) state.pgFlow = 0.4;
+  if (!('patSharp'   in p)) state.patSharp   = 0.5;
+  if (!('patScale'   in p)) state.patScale   = 1.0;
+  if (!('patDetail'  in p)) state.patDetail  = 0.5;
+  if (!('patDistort' in p)) state.patDistort = 0.0;
+  if (!('patSeed'    in p)) state.patSeed    = 0.0;
+  if (!('patAxis'    in p)) state.patAxis    = 0;
+  if (!('panelContrast' in p)) state.panelContrast = 1.0;
+  if (!('shapeScale' in p)) state.shapeScale = 1.0;
   if (!('mirrorLens' in p)) state.mirrorLens = true;
   if (!('mirrorPanel' in p)) state.mirrorPanel = true;
   if (!('lookSaturation' in p)) state.lookSaturation = 1.0;
@@ -1899,7 +2191,18 @@ function applyPreset(p) {
   const fillMissingParams = (lensType, paramsObj) => {
     const defs = LENS_TYPES[lensType] && LENS_TYPES[lensType].params;
     if (!defs || !paramsObj) return;
-    for (const k in defs) if (!(k in paramsObj)) paramsObj[k] = defs[k].value;
+    for (const k in defs) {
+      if (!(k in paramsObj)) {
+        paramsObj[k] = defs[k].value;
+      } else if (typeof defs[k].min === 'number' && typeof defs[k].max === 'number' &&
+                 typeof paramsObj[k] === 'number' &&
+                 (paramsObj[k] < defs[k].min || paramsObj[k] > defs[k].max)) {
+        // Legacy values outside the current slider range get reset to the
+        // current default — covers cases where a param's range was narrowed
+        // (e.g. bumpSharp moved from 0.3..3 → 0..1 and the centre meaning shifted).
+        paramsObj[k] = defs[k].value;
+      }
+    }
   };
   fillMissingParams(state.lensType, state.params);
   fillMissingParams(state.lensTypeB, state.paramsB);
@@ -1925,7 +2228,7 @@ function saveAsDefaults() {
   const snap = presetSnapshot();
   // Also capture Capture / scene fields that aren't in the standard preset snapshot.
   for (const k of [
-    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','motionBlurSamples','superDispersion','maxQualityExport','panelSmooth','watermarkText',
+    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','motionBlurSamples','superDispersion','ecoRender','maxQualityExport','panelSmooth','watermarkText',
     'autoOrbit','orbitSpeed','orbitArc',
     'autoZoom','zoomAmount','zoomSpeed',
     'autoPan','panAmount','panSpeed',
@@ -2134,6 +2437,13 @@ function syncShader() {
     m.uniforms.uHueShift.value    = state.panelHue;
     m.uniforms.uPgLineWidth.value = state.pgLineWidth != null ? state.pgLineWidth : 0.06;
     m.uniforms.uPgFlow.value      = state.pgFlow      != null ? state.pgFlow      : 0.4;
+    m.uniforms.uPatSharp.value   = state.patSharp   != null ? state.patSharp   : 0.5;
+    m.uniforms.uPatScale.value   = state.patScale   != null ? state.patScale   : 1.0;
+    m.uniforms.uPatDetail.value  = state.patDetail  != null ? state.patDetail  : 0.5;
+    m.uniforms.uPatDistort.value = state.patDistort != null ? state.patDistort : 0.0;
+    m.uniforms.uPatSeed.value    = state.patSeed    != null ? state.patSeed    : 0.0;
+    m.uniforms.uPatAxis.value    = state.patAxis    != null ? +state.patAxis | 0 : 0;
+    m.uniforms.uPanelContrast.value = state.panelContrast != null ? state.panelContrast : 1.0;
     m.uniforms.uPanelMirror.value = state.mirrorPanel ? 1 : 0;
     m.uniforms.uSqThickness.value = state.sqThickness;
     m.uniforms.uSqSoftness.value  = state.sqSoftness;
@@ -2367,7 +2677,13 @@ function doScreenshot() {
 // -------------------------------------------------------------------------
 // GUI
 // -------------------------------------------------------------------------
+// Two-panel layout: lens-design controls on the right (default lil-gui
+// position), composition / output / actions on the left (CSS-overridden).
 const gui = new GUI({ title: 'Prismatica — Lens' });
+const gui2 = new GUI({ title: 'Composition + Output' });
+gui2.domElement.style.left = '0';
+gui2.domElement.style.right = 'auto';
+gui2.domElement.style.top = '0';
 let fA = null, paramFolderA = null, paramFolderB = null, paramFolderMatB = null;
 let presetDropdownCtrl;
 
@@ -2721,6 +3037,19 @@ function rebuildSequenceGUI() {
   }
 }
 
+// Defensive: ensure every key from defaultStateSnapshot exists on `state` with
+// its default value, even if state was loaded from a saved preset that predates
+// the key. Without this, lil-gui silently aborts an .add() when the property is
+// undefined — and any controls AFTER the failure don't render. This was the
+// cause of the "I can't see the new controls" bug after adding eco render.
+function normalizeState() {
+  const d = defaultStateSnapshot();
+  for (const k in d) {
+    if (state[k] === undefined) state[k] = d[k];
+  }
+}
+normalizeState();
+
 // Build GUI structure
 (function buildGUI() {
   fA = gui.addFolder('A · lens');
@@ -2731,10 +3060,21 @@ function rebuildSequenceGUI() {
   fA.add(state, 'panelWidth', 100, 2000, 10).name('panel W (mm)').onFinishChange(rebuildLenses);
   fA.add(state, 'panelHeight', 100, 2000, 10).name('panel H (mm)').onFinishChange(rebuildLenses);
   fA.add(state, 'resolution', 0.5, 8.0, 0.5).name('mesh res (mm)').onFinishChange(rebuildLenses);
-  fA.add(state, 'smoothing', 0, 6, 1).name('surface smoothing').onFinishChange(rebuildLenses);
-  fA.add(state, 'compare').name('compare A | B').onChange(() => { buildParamFolders(); rebuildLenses(); });
+  // Shape scale: <1 stretches the lens features outward to fill the panel
+  // (less flat margin); >1 squeezes them inward (more flat margin).
+  fA.add(state, 'shapeScale', 0.3, 2.0, 0.01).name('shape scale').onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  // Bump shape: number of box-blur passes applied to the height field.
+  // 0 = original sharp peaks. Higher = softer, rounder, plateau-style bumps.
+  // Was capped at 6, bumped to 25 so you can really blur peaks for a glassy look.
+  fA.add(state, 'smoothing', 0, 25, 1).name('bump smoothness').onFinishChange(rebuildLenses);
+  // (Compare A | B toggle removed at Kit's request. state.compare stays in the
+  // schema with default false so the dual-lens code paths can never trigger.
+  // The rebuildLenses logic checks state.compare itself so the B lens silently
+  // disappears for any saved preset that had it on.)
   fA.add(state, 'mirrorLens').name('mirror H + V (symmetric)').onChange(rebuildLenses);
-  fA.add(state, 'loadLogo').name('load logo…');
+  // (load logo button removed at Kit's request — the underlying logo lens type
+  // and loadLogoFile/loadLogoUrl helpers stay so any saved preset that picked
+  // 'logo' still renders.)
 
   buildParamFolders();
 
@@ -2748,11 +3088,47 @@ function rebuildSequenceGUI() {
   const f2 = gui.addFolder('LED Panel');
   // Removed from dropdown: checker (0), noise (5 — glitchy), stars (9). Underlying
   // shader branches kept for legacy saved-state compatibility.
-  const panelModeCtrl = f2.add(state, 'panelMode', { pixelgrid: 1, wave: 2, radial: 3, scanlines: 4, white: 6, image: 7, video: 8, spiral: 10, rings: 11, rays: 12, squares: 13, 'liquid iridescence': 14, 'plasma aurora': 15, 'bubble flow': 16, 'liquid mercury': 17, 'caustics': 18, 'warped grid': 19, 'wavefield grid': 20, 'diamond bands': 21 })
-    .name('content').onChange(v => { const m = +v; state.panelMode = m; ledMat.uniforms.uMode.value = m; ledMatB.uniforms.uMode.value = m; updatePanelControlVisibility(); });
+  // Per-mode default speed — auto-applied when the user switches mode so each
+  // pattern starts at a pace tuned for what looks good through the lens. User
+  // can still adjust the speed slider afterwards.
+  const MODE_SPEED_DEFAULTS = {
+    2:  0.04,  // wave: very slow
+    3:  0.10,  // radial
+    4:  0.10,  // scanlines
+    10: 0.20,  // spiral
+    11: 0.20,  // rings
+    13: 0.10,  // squares
+    14: 0.10,  // liquid iridescence
+    16: 0.30,  // bubble flow
+    18: 0.05,  // caustics — very slow, in-shader multiplier already drops it further
+    19: 0.06,  // warped grid — same treatment, slow silk-drift feel
+    20: 0.10,  // wavefield grid
+    21: 0.10,  // diamond bands
+  };
+  // White (mode 6) removed at Kit's request. Underlying shader branch still
+  // exists for any saved-state backwards compatibility.
+  const panelModeCtrl = f2.add(state, 'panelMode', { pixelgrid: 1, wave: 2, radial: 3, scanlines: 4, image: 7, video: 8, spiral: 10, rings: 11, rays: 12, squares: 13, 'liquid iridescence': 14, 'plasma aurora': 15, 'bubble flow': 16, 'liquid mercury': 17, 'caustics': 18, 'warped grid': 19, 'wavefield grid': 20, 'diamond bands': 21 })
+    .name('content').onChange(v => {
+      const m = +v;
+      state.panelMode = m;
+      ledMat.uniforms.uMode.value = m;
+      ledMatB.uniforms.uMode.value = m;
+      // Auto-tune speed for the selected mode.
+      if (MODE_SPEED_DEFAULTS[m] != null) {
+        state.panelSpeed = MODE_SPEED_DEFAULTS[m];
+        ledMat.uniforms.uSpeed.value = state.panelSpeed;
+        ledMatB.uniforms.uSpeed.value = state.panelSpeed;
+      }
+      updatePanelControlVisibility();
+      guiRefresh();
+    });
   const ctlPanelScale  = f2.add(state, 'panelScale', 4, 200, 1).name('pixels').onChange(v => { ledMat.uniforms.uScale.value = v; ledMatB.uniforms.uScale.value = v; });
   const ctlPanelSpeed  = f2.add(state, 'panelSpeed', 0.0, 3.0, 0.05).name('speed').onChange(v => { ledMat.uniforms.uSpeed.value = v; ledMatB.uniforms.uSpeed.value = v; });
   const ctlPanelBright = f2.add(state, 'panelBrightness', 0.2, 6.0, 0.05).name('brightness').onChange(v => { ledMat.uniforms.uBrightness.value = v; ledMatB.uniforms.uBrightness.value = v; });
+  // Panel-side contrast around mid-grey. Pulls highlights up + crushes blacks
+  // down so the lens has more dynamic range to refract against. Applied to the
+  // shader output BEFORE brightness, so contrast and brightness are independent.
+  const ctlPanelContrast = f2.add(state, 'panelContrast', 0.5, 2.5, 0.01).name('contrast').onChange(v => { ledMat.uniforms.uPanelContrast.value = v; ledMatB.uniforms.uPanelContrast.value = v; });
   const ctlPanelHue    = f2.add(state, 'panelHue', 0.0, 1.0, 0.01).name('hue shift').onChange(v => { ledMat.uniforms.uHueShift.value = v; ledMatB.uniforms.uHueShift.value = v; });
   const ctlPgLineWidth = f2.add(state, 'pgLineWidth', 0.0, 0.4, 0.005).name('grid line thickness').onChange(v => { ledMat.uniforms.uPgLineWidth.value = v; ledMatB.uniforms.uPgLineWidth.value = v; });
   const ctlPgFlow      = f2.add(state, 'pgFlow', -5.0, 5.0, 0.01).name('grid drift speed').onChange(v => { ledMat.uniforms.uPgFlow.value = v; ledMatB.uniforms.uPgFlow.value = v; });
@@ -2763,18 +3139,43 @@ function rebuildSequenceGUI() {
   const ctlLoadVideo   = f2.add(state, 'loadVideo').name('load video…');
   const ctlClearMedia  = f2.add(state, 'clearMedia').name('clear media');
 
+  // Pattern Detail subfolder — generic per-pattern shaping knobs. Each panel
+  // mode interprets them in its own way; sliders shown/hidden per mode so the
+  // user only ever sees the controls that actually do something.
+  const fPat = f2.addFolder('Pattern Detail');
+  const ctlPatSharp   = fPat.add(state, 'patSharp',   0.0, 1.0, 0.005).name('sharpness').onChange(v => { ledMat.uniforms.uPatSharp.value = v; ledMatB.uniforms.uPatSharp.value = v; });
+  const ctlPatScale   = fPat.add(state, 'patScale',   0.3, 4.0, 0.01).name('scale').onChange(v => { ledMat.uniforms.uPatScale.value = v; ledMatB.uniforms.uPatScale.value = v; });
+  const ctlPatDetail  = fPat.add(state, 'patDetail',  0.0, 1.0, 0.01).name('detail / intricacy').onChange(v => { ledMat.uniforms.uPatDetail.value = v; ledMatB.uniforms.uPatDetail.value = v; });
+  const ctlPatDistort = fPat.add(state, 'patDistort', 0.0, 1.0, 0.01).name('distortion').onChange(v => { ledMat.uniforms.uPatDistort.value = v; ledMatB.uniforms.uPatDistort.value = v; });
+  const ctlPatAxis    = fPat.add(state, 'patAxis', {
+    horizontal: 0,
+    vertical: 1,
+    'diagonal /': 2,
+    'diagonal \\': 3,
+    'X-split (lens)': 4,
+    'X-split (inverted)': 5,
+  }).name('axis').onChange(v => { const n = +v | 0; state.patAxis = n; ledMat.uniforms.uPatAxis.value = n; ledMatB.uniforms.uPatAxis.value = n; });
+  const ctlPatRandom  = fPat.add({ randomize: () => {
+    state.patSeed = Math.random() * 100;
+    ledMat.uniforms.uPatSeed.value = state.patSeed;
+    ledMatB.uniforms.uPatSeed.value = state.patSeed;
+    // (status update removed — the visual change in the panel is feedback enough)
+  } }, 'randomize').name('🎲 randomize');
+
   // Per-mode control visibility — hide sliders that don't apply to the active
   // shader so the GUI only ever shows things the user can actually tune.
-  // Mode applicability:
-  //   - pixels (uScale): used by pixelgrid (1), radial (3), rings (11), warped grid (19), wavefield grid (20), diamond bands (21), squares (13). Not used by fluid shaders.
-  //   - hue shift (uHueShift): respected by everything that uses hsv2rgb / iqPalette.
-  //   - grid line thickness + drift: ONLY pixelgrid (1), warped grid (19), wavefield grid (20).
-  //   - load image / load video / clear media: ONLY image (7), video (8).
-  //   - speed, brightness, gap, smooth, mirror: relevant to ALL animated modes.
   const MODE_USES_SCALE = new Set([1, 3, 11, 13, 19, 20, 21]);
   const MODE_USES_GRID  = new Set([1, 19, 20]);
   const MODE_USES_HUE   = new Set([1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
   const MODE_IS_MEDIA   = new Set([7, 8]);
+  // Which generic Pattern Detail knobs apply to which modes.
+  // Modes not listed here keep the corresponding slider hidden.
+  const MODE_USES_PAT_SHARP   = new Set([2, 3, 4, 10, 11, 13, 14, 15, 16, 17, 18, 21]);
+  const MODE_USES_PAT_SCALE   = new Set([2, 3, 4, 10, 11, 13, 14, 15, 16, 17, 18, 21]);
+  const MODE_USES_PAT_DETAIL  = new Set([2, 10, 11, 13, 14, 15, 16, 17, 18]);
+  const MODE_USES_PAT_DISTORT = new Set([3, 10, 11, 13, 21]);
+  const MODE_USES_PAT_AXIS    = new Set([4]);                    // scanlines only
+  const MODE_USES_PAT_RANDOM  = new Set([14, 15, 16, 17, 18]);   // noise-based
   function updatePanelControlVisibility() {
     const m = +state.panelMode | 0;
     ctlPanelScale.show(MODE_USES_SCALE.has(m));
@@ -2784,19 +3185,41 @@ function rebuildSequenceGUI() {
     ctlLoadImage.show(MODE_IS_MEDIA.has(m));
     ctlLoadVideo.show(MODE_IS_MEDIA.has(m));
     ctlClearMedia.show(MODE_IS_MEDIA.has(m));
+    ctlPatSharp.show(MODE_USES_PAT_SHARP.has(m));
+    ctlPatScale.show(MODE_USES_PAT_SCALE.has(m));
+    ctlPatDetail.show(MODE_USES_PAT_DETAIL.has(m));
+    ctlPatDistort.show(MODE_USES_PAT_DISTORT.has(m));
+    ctlPatAxis.show(MODE_USES_PAT_AXIS.has(m));
+    ctlPatRandom.show(MODE_USES_PAT_RANDOM.has(m));
+    // Hide the Pattern Detail folder header entirely if no knobs apply.
+    const anyApply = MODE_USES_PAT_SHARP.has(m) || MODE_USES_PAT_SCALE.has(m) ||
+                     MODE_USES_PAT_DETAIL.has(m) || MODE_USES_PAT_DISTORT.has(m) ||
+                     MODE_USES_PAT_AXIS.has(m) || MODE_USES_PAT_RANDOM.has(m);
+    if (fPat && fPat.domElement) fPat.domElement.style.display = anyApply ? '' : 'none';
     // panelSpeed/Brightness/Distance/Smooth/Mirror always shown — they apply universally.
   }
   updatePanelControlVisibility();
+  // Expose for the autoLoad code path so it can refresh visibility after a
+  // saved preset hydrates a mode that doesn't use grid sliders etc.
+  window.__updatePanelControls = updatePanelControlVisibility;
 
   // Squares folder + Gradient Overlay subfolder removed at Kit's request.
   // The squares panel mode (13) and its uniforms still exist underneath, so any
   // saved preset that was using them keeps working — only the GUI controls are gone.
 
-  const fScene = gui.addFolder('Scene').close();
+  const fScene = gui2.addFolder('Scene').close();
   fScene.addColor(state, 'bgColor').name('background').onChange(syncScene);
   // Lens spin slider removed at Kit's request — driven exclusively by the shot
   // sequence now. The state.lensSpin value stays at 0 by default; legacy saved
   // presets that set it to non-zero will still spin until reset.
+
+  // Live view quality — does NOT affect exported renders. Sets the renderer's
+  // pixel ratio + transmission RT resolution for the on-screen preview only.
+  // Eco button (top-left) overrides this temporarily; this is the base level
+  // the eco button restores to when toggled off.
+  const fLive = fScene.addFolder('Live View').close();
+  fLive.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('quality (live only)').onChange(applyRenderQuality);
+
   const fBloom = fScene.addFolder('Bloom').close();
   fBloom.add(state, 'bloomEnabled').name('enabled').onChange(syncBloom);
   fBloom.add(state, 'bloomStrength', 0.0, 2.0, 0.01).name('strength').onChange(syncBloom);
@@ -2816,10 +3239,15 @@ function rebuildSequenceGUI() {
   fLook.add(state, 'clearLut').name('clear LUT');
   fLook.add(state, 'lookLutName').name('current LUT').listen().disable();
 
-  fSeq = gui.addFolder('Shot Sequence (storyboard)');
+  fSeq = gui2.addFolder('Shot Sequence (storyboard)');
   fSeq.add(state, 'seqAddShot').name('➕ save shot (current view)  [N]');
   seqPlayBtnCtrl = fSeq.add(state, 'seqPreview').name('▶ preview sequence  [Enter]');
   fSeq.add(state, 'seqStopPreview').name('⏹ stop preview');
+  // Eco render — sits right above the export button so it's in your face when
+  // you're about to render. Throttles the export so the laptop stays usable.
+  // Combines an inter-frame pause with SSAA=1 + half-res transmission to drop
+  // per-frame GPU load. Read live, can be flipped mid-render.
+  fSeq.add(state, 'ecoRender', ['off', 'light', 'half-speed', 'gentle']).name('🌱 eco render (laptop-friendly)');
   fSeq.add(state, 'seqExport').name('🎬 export sequence as video');
   fSeq.add(state, 'seqEasing', Object.keys(EASINGS)).name('easing curve');
   fSeq.add(state, 'seqDefaultTransition', 0.1, 30, 0.1).name('default transition (s)');
@@ -2830,8 +3258,10 @@ function rebuildSequenceGUI() {
   // Build the per-shot sub-folders now
   rebuildSequenceGUI();
 
-  const fCap = gui.addFolder('Capture');
-  fCap.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('quality').onChange(applyRenderQuality);
+  const fCap = gui2.addFolder('Capture');
+  // (live view quality dropdown moved out of Capture — it doesn't affect the
+  // exported render. Lives under Scene → Live View now, alongside the eco
+  // toggle and other live-only controls.)
   fCap.add(state, 'recAspect', Object.keys(REC_ASPECTS)).name('video aspect').onChange(updateAspectOverlay);
   fCap.add(state, 'recResolution', Object.keys(REC_RESOLUTIONS)).name('output resolution');
   fCap.add(state, 'recFps', { '24 (cinematic)': 24, '30 (Instagram)': 30, '60 (smooth)': 60 }).name('video fps');
@@ -2841,13 +3271,16 @@ function rebuildSequenceGUI() {
   // Both of these are experimental quality boosts — opt-in so an unstable render
   // doesn't silently affect your normal exports. Trial them on a short test clip first.
   fCap.add(state, 'motionBlurSamples', { 'off (sharp)': 1, '4× (cinematic)': 4, '8× (silky)': 8 }).name('motion blur (test)').onChange(v => { state.motionBlurSamples = +v | 0; });
+  // (Eco render dropdown moved into the Shot Sequence folder — it sits right
+  // next to the "export sequence as video" button so the choice is in front of
+  // you when you actually click render.)
   fCap.add(state, 'superDispersion').name('supersample dispersion (test)');
   fCap.add(state, 'maxQualityExport').name('★ max quality on export');
   // Note: video export now happens via the Shot Sequence "🎬 export sequence as video"
   // button. The standalone offline render / stop / live record / watermark controls
   // were removed at Kit's request — sequences cover all his rendering needs.
 
-  const fP = gui.addFolder('Presets').close();
+  const fP = gui2.addFolder('Presets').close();
   presetDropdownCtrl = fP.add(state, 'currentPreset', { '—': '—' })
     .name('preset').onChange((name) => {
       if (!name || name === '—') return;
@@ -2865,16 +3298,31 @@ function rebuildSequenceGUI() {
   // Bundles removed at Kit's request — they didn't reload state cleanly.
   // Use the Presets folder above to save/load custom configurations instead.
 
-  const f3 = gui.addFolder('Actions');
-  // Eco mode lives as a FLOATING BUTTON in the top-left of the canvas (see #ecoBtn
-  // in the markup) so Kit doesn't have to scroll the GUI panel to reach it. Pause
-  // stays here since it's used less often and keyboard "P" is the fast access.
+  const f3 = gui2.addFolder('Actions');
+  // Eco + shape view toggles (previously floating buttons in the top-left).
+  // Click checkbox to flip; the existing toggleEcoMode / applyShapeView funcs
+  // do all the heavy lifting (quality drop, panel hide, material swap, etc.).
+  f3.add(state, 'ecoModeFlag').name('⚡ eco mode (E)').listen().onChange(v => {
+    // Keep flipping toggleEcoMode until the underlying state matches what the
+    // user just clicked. Belt-and-braces in case ecoModeActive and the GUI
+    // flag drift apart for any reason (defensive — safe even if they don't).
+    let guard = 0;
+    while (!!v !== !!ecoModeActive && guard < 2) {
+      toggleEcoMode();
+      guard++;
+    }
+  });
+  f3.add(state, 'shapeView').name('🗺 shape view').onChange(v => applyShapeView(!!v));
   pauseBtnCtrl = f3.add(state, 'togglePause').name('⏯ pause (P)');
   f3.add(state, 'reset').name('reset');
   f3.add(state, 'showDimensions').name('show dimensions overlay').onChange(updateDimensionOverlay);
   f3.add(state, 'exportSTL').name('export STL (A)');
   f3.add(state, 'exportSpec').name('📄 export fabrication spec');
   f3.add(state, 'screenshot').name('save screenshot');
+  // Live FPS readout — replaces the floating fps badge that used to sit in the
+  // bottom-left. .listen() polls state.fpsText each frame; .disable() makes the
+  // row read-only so it can't be edited.
+  f3.add(state, 'fpsText').name('frame rate').listen().disable();
 })();
 
 // -------------------------------------------------------------------------
@@ -2909,8 +3357,24 @@ applyRenderQuality(state.renderQuality);
   state.mirrorPanel = true;
   ledMat.uniforms.uPanelMirror.value = 1;
   if (ledMatB) ledMatB.uniforms.uPanelMirror.value = 1;
+  // Force compare A|B off — the toggle is no longer in the GUI, so any saved
+  // preset that had compare=true would silently keep a B lens around with no
+  // way for the user to dismiss it.
+  state.compare = false;
+  // Re-normalise after preset application — the saved preset might be missing
+  // newly-added keys. This is a belt-and-braces guarantee that every state key
+  // referenced anywhere in the GUI is present, regardless of preset vintage.
+  normalizeState();
   rebuildLenses();
   guiRefresh();
+  // Refresh the per-mode panel slider visibility after a preset loads its
+  // panelMode. Without this, sliders that don't apply to the loaded mode (eg.
+  // grid line thickness on caustics) stay visible until the user re-selects
+  // the mode from the dropdown.
+  if (typeof window.__updatePanelControls === 'function') window.__updatePanelControls();
+  // (Startup eco-on deferred until after `let ecoModeActive` has initialised
+  //  later in the file — running it here would hit a TDZ ReferenceError.
+  //  See the queueMicrotask block near the bottom of the module.)
 })();
 
 function syncLookResolution(w, h) {
@@ -2931,9 +3395,10 @@ window.addEventListener('resize', () => {
 
 const clock = new THREE.Clock();
 let fpsAccum = 0, fpsFrames = 0, fpsLast = performance.now();
-const fpsEl = document.createElement('div');
-fpsEl.id = 'fps';
-document.body.appendChild(fpsEl);
+// FPS no longer has a dedicated floating element — the readout lives inside
+// Actions → frame rate via state.fpsText (auto-listened to by the controller).
+// Keep a no-op stub so legacy code that pokes fpsEl doesn't crash.
+const fpsEl = { textContent: '', style: {} };
 
 // --- camera auto-motion state ---
 let zoomBaseDist = null;
@@ -3161,11 +3626,16 @@ let ecoPreEcoSnapshot = null;
 // Keep the floating eco-mode button visually in sync with the eco state.
 // Idempotent — safe to call from anywhere that flips ecoModeActive.
 function syncEcoBtn() {
+  // Mirror eco state into the listenable state field so the GUI checkbox stays
+  // in sync regardless of how the toggle was triggered (button, keyboard, code).
+  if (typeof state !== 'undefined') state.ecoModeFlag = !!ecoModeActive;
+  // Floating button is removed but the function still gets called from various
+  // places — guard against the missing element.
   const btn = document.getElementById('ecoBtn');
-  if (!btn) return;
-  const on = !!ecoModeActive;
-  btn.classList.toggle('on', on);
-  btn.textContent = on ? '✓ eco on' : '⚡ eco';
+  if (btn) {
+    btn.classList.toggle('on', !!ecoModeActive);
+    btn.textContent = ecoModeActive ? '✓ eco on' : '⚡ eco';
+  }
 }
 
 // Wire the floating button click + ensure the visual state matches at boot.
@@ -3175,6 +3645,47 @@ function syncEcoBtn() {
   btn.addEventListener('click', () => toggleEcoMode());
   // Initial sync runs after toggleEcoMode is hoisted (function decl above).
   setTimeout(() => { try { syncEcoBtn(); } catch (_) {} }, 0);
+})();
+
+// --- Shape view toggle -------------------------------------------------------
+// Swaps the transmissive lens material for the topographic clay shader and
+// hides the LED panel + bloom so the form reads cleanly. One-click view of
+// what we're actually fabricating — useful both for me sense-checking the
+// shape and for sending to the fabricator alongside the STL.
+function applyShapeView(on) {
+  state.shapeView = !!on;
+  const btn = document.getElementById('shapeBtn');
+  if (btn) {
+    btn.classList.toggle('on', !!on);
+    btn.textContent = on ? '✓ shape on' : '🗺 shape';
+  }
+  // Swap lens materials and hide the LED panel while shape view is active.
+  if (lensMesh)  lensMesh.material  = on ? shapeViewMaterial : lensMaterial;
+  if (lensMeshB) lensMeshB.material = on ? shapeViewMaterial : lensMaterialB;
+  if (ledPanel)  ledPanel.visible   = !on && state.lensType !== 'logo';
+  if (ledPanelB) ledPanelB.visible  = !on && state.compare;
+  if (ledCasing)  ledCasing.visible  = !on && state.lensType !== 'logo';
+  if (ledCasingB) ledCasingB.visible = !on && state.compare;
+  // Lift the background to a mid-grey for contrast with the warm topo colours.
+  scene.background = new THREE.Color(on ? '#222222' : state.bgColor);
+  if (backdrop && backdrop.material) backdrop.material.color.set(on ? '#1a1a1a' : state.bgColor);
+  // Disable bloom + look-grade post-processing during shape view — they'd
+  // wash out the contour lines and false-colour ramp.
+  if (bloomPass) bloomPass.enabled = on ? false : !!state.bloomEnabled;
+  if (lookPass) {
+    lookPass.uniforms.uSaturation.value = on ? 1.0 : (state.lookSaturation ?? 1.0);
+    lookPass.uniforms.uContrast.value   = on ? 1.0 : (state.lookContrast   ?? 1.0);
+    lookPass.uniforms.uVignette.value   = on ? 0.0 : (state.lookVignette   ?? 0.0);
+    lookPass.uniforms.uGrain.value      = on ? 0.0 : (state.lookGrain      ?? 0.0);
+    lookPass.uniforms.uSharpen.value    = on ? 0.0 : (state.lookSharpen    ?? 0.0);
+    lookPass.uniforms.uLutSize.value    = on ? 0   : lookPass.uniforms.uLutSize.value;
+  }
+}
+
+(function bindShapeBtn() {
+  const btn = document.getElementById('shapeBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => applyShapeView(!state.shapeView));
 })();
 
 function toggleEcoMode() {
@@ -3260,12 +3771,22 @@ const roTitle  = document.getElementById('roTitle');
 const roStats  = document.getElementById('roStats');
 const roBarFill = document.getElementById('roBarFill');
 const roStopBtn = document.getElementById('roStopBtn');
+const roEcoSelect = document.getElementById('roEcoSelect');
 if (roStopBtn) roStopBtn.addEventListener('click', () => abortOfflineRender());
+// Eco render dropdown inside the overlay — render loop reads state.ecoRender
+// live every frame, so flipping this mid-render takes effect immediately.
+// We also update the GUI controller so the value stays in sync after render.
+if (roEcoSelect) roEcoSelect.addEventListener('change', (e) => {
+  state.ecoRender = e.target.value;
+  guiRefresh();
+});
 function showRenderOverlay({ W, H, fps, totalFrames, mode }) {
   if (!roEl) return;
   roTitle.textContent = mode === 'sequence' ? 'Rendering sequence…' : 'Rendering…';
   roStats.innerHTML = `<span class="num">${W}×${H}</span> · ${fps} fps · <span class="num">${totalFrames}</span> frames · preparing encoder…`;
   roBarFill.style.width = '0%';
+  // Sync the dropdown to whatever the user picked in the GUI before render started.
+  if (roEcoSelect) roEcoSelect.value = state.ecoRender || 'off';
   roEl.classList.add('on');
   document.body.classList.add('render-mode');
 }
@@ -3318,10 +3839,23 @@ async function renderOffline(opts = {}) {
   // H.264 requires even dimensions
   W = W & ~1; H = H & ~1;
 
+  // Eco render — combines (a) a pause after each frame so the OS can run other
+  // apps and (b) a per-frame GPU-load reduction so the pause actually translates
+  // into headroom. Declared up here so it can influence the SSAA + transmission
+  // decisions below. The pause is read from state EVERY frame so flipping the
+  // dropdown mid-render takes effect immediately.
+  const ECO_PAUSE = { off: 0, light: 60, 'half-speed': 150, gentle: 320 };
+  const ecoActive = state.ecoRender && state.ecoRender !== 'off';
+
   // Supersample factor — render at ssaa×output then downscale for clean edges.
+  // Eco render forces SSAA to 1× regardless of user setting / max-Q so per-frame
+  // GPU load drops dramatically. Combined with the inter-frame pause this gives
+  // a real laptop-friendly render. (Output resolution and quality of the lens
+  // simulation itself are unchanged — only the supersample multiplier is dropped.)
   const ssaaMap = { 'off (fast)': 1, '2× (clean)': 2, '3× (pristine)': 3, '4× (gallery)': 4 };
   const userSsaa = ssaaMap[state.renderSmooth] || 1;
-  const ssaa = maxQ ? Math.max(userSsaa, 3) : userSsaa;  // max-q forces ≥3×
+  let ssaa = maxQ ? Math.max(userSsaa, 3) : userSsaa;  // max-q forces ≥3×
+  if (ecoActive) ssaa = 1;
   const renderW = (W * ssaa) & ~1;
   const renderH = (H * ssaa) & ~1;
 
@@ -3444,10 +3978,15 @@ async function renderOffline(opts = {}) {
     ledMat.uniforms.uPanelSmooth.value = 1;
     ledMatB.uniforms.uPanelSmooth.value = 1;
   }
+  // Eco render: drop the transmission RT resolution to lighten the most
+  // expensive pass. Halves transmission cost vs default 1.0.
+  if (ecoActive) {
+    renderer.transmissionResolutionScale = 0.5;
+  }
   // Supersample dispersion is OPT-IN ONLY. It supersamples the transmission RT
   // to 2× viewport for sharper rainbow fringes — but it can cause rendering
   // glitches on some setups, so it's off by default and isn't pulled in by maxQ.
-  if (state.superDispersion) {
+  if (state.superDispersion && !ecoActive) {
     renderer.transmissionResolutionScale = 2.0;
   }
   const outputAspect = W / H;
@@ -3607,11 +4146,19 @@ async function renderOffline(opts = {}) {
       const pct = ((i + 1) / totalFrames * 100).toFixed(0);
       const elapsed = (performance.now() - startMs) / 1000;
       const eta = elapsed / (i + 1) * (totalFrames - i - 1);
-      setStatus(`rendering ${i + 1}/${totalFrames} · ${pct}% · eta ${eta.toFixed(0)}s${state.recLoop ? ' · loop' : ''}`);
+      const livePause = ECO_PAUSE[state.ecoRender] || 0;
+      setStatus(`rendering ${i + 1}/${totalFrames} · ${pct}% · eta ${eta.toFixed(0)}s${state.recLoop ? ' · loop' : ''}${livePause ? ` · 🌱 eco (${state.ecoRender})` : ''}`);
       updateRenderOverlay({ frame: i + 1, totalFrames, elapsedMs: performance.now() - startMs, W, H, fps });
       await new Promise(r => setTimeout(r, 0));
     }
     if (encodeError) break;
+    // Eco render — pause between frames so the OS can run other apps. Read
+    // state.ecoRender live every frame so flipping the dropdown mid-render
+    // takes effect immediately on the very next frame.
+    const pauseMs = ECO_PAUSE[state.ecoRender] || 0;
+    if (pauseMs > 0) {
+      await new Promise(r => setTimeout(r, pauseMs));
+    }
   }
 
   // Only flush + finalize if encoder is still alive; a codec error above closes it.
@@ -3696,14 +4243,14 @@ async function renderOffline(opts = {}) {
 function animate() {
   if (offlineInProgress) {
     // Throttle to ~5Hz during offline render — live loop has nothing to do.
-    fpsEl.textContent = 'rendering';
+    state.fpsText = 'rendering…';
     setTimeout(() => requestAnimationFrame(animate), 200);
     return;
   }
   if (animPaused) {
     // Keep the loop alive at a low cadence so resume is instant, but skip all
     // shader/motion/render work so the GPU + CPU stay quiet.
-    fpsEl.textContent = 'paused';
+    state.fpsText = 'paused';
     setTimeout(() => requestAnimationFrame(animate), 200);
     return;
   }
@@ -3734,12 +4281,22 @@ function animate() {
   const now = performance.now();
   if (now - fpsLast > 500) {
     const fps = (fpsFrames * 1000) / (now - fpsLast);
-    fpsEl.textContent = `${fps.toFixed(0)} fps`;
+    state.fpsText = `${fps.toFixed(0)} fps`;
     fpsFrames = 0; fpsLast = now;
   }
   requestAnimationFrame(animate);
 }
 animate();
+
+// Always start with eco mode ON so the laptop stays cool on launch. Deferred
+// via queueMicrotask so it runs AFTER the rest of the module (specifically
+// after `let ecoModeActive` initialises further up). Without this defer we'd
+// hit a temporal-dead-zone ReferenceError and the app would render a black
+// screen on load. User can press E or click the floating ⚡ eco button to flip
+// it off when they want full live-view quality.
+queueMicrotask(() => {
+  try { if (!ecoModeActive) toggleEcoMode(); } catch (e) { console.warn('eco-on at startup skipped:', e); }
+});
 
 // -------------------------------------------------------------------------
 // Keyboard shortcuts  (H hide UI · F fullscreen · R record · Space auto-orbit

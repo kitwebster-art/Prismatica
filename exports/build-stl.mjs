@@ -34,15 +34,17 @@ const args = Object.fromEntries(
 );
 const num = (k, dflt) => args[k] !== undefined ? Number(args[k]) : dflt;
 
-// --- lens parameters (defaults match index.html ripple_field defaults) ---
+// --- lens parameters (defaults match index.html stepped_ripple defaults) ---
 const PANEL_W   = num('width',      600);   // mm
 const PANEL_H   = num('height',     600);   // mm
 const THICKNESS = num('thickness',  15);    // mm — base flat thickness below the ripples
 const RESOLUTION= num('resolution', 1.0);   // mm grid pitch
 const RIPPLE = {
-  wavelength: num('wavelength', 42),  // mm — distance between ripple peaks
-  amplitude:  num('amplitude',  100), // mm — height of the central peak
-  step:       num('step',       10),  // mm — drop in peak height per successive ripple
+  wavelength: num('wavelength', 42),    // mm — distance between ripple peaks
+  amplitude:  num('amplitude',  100),   // mm — height of the central peak
+  step:       num('step',       10),    // mm — drop in peak height per successive ripple
+  edgeFade:   num('edgefade',   0.18),  // 0..0.5 — ratio of short-side that fades to flat
+  bumpSharp:  num('bumpsharp',  0.5),   // 0..1 — 0=flat plateaus, 0.5=cosine, 1=sharp spikes
 };
 
 console.log('Building with:');
@@ -51,13 +53,28 @@ console.log(`  base:        ${THICKNESS} mm thick`);
 console.log(`  ripple:      wavelength ${RIPPLE.wavelength} mm`);
 console.log(`               central peak ${RIPPLE.amplitude} mm`);
 console.log(`               steps down ${RIPPLE.step} mm per ring`);
+console.log(`               edge fade ratio ${RIPPLE.edgeFade}`);
+console.log(`               bump shape exponent ${RIPPLE.bumpSharp}`);
 console.log(`  grid pitch:  ${RESOLUTION} mm`);
 
 // --- height field: stepped ripples covering the full panel rectangle, fading
 // smoothly to flat in a margin near each panel edge. No flat corners.
 const TAU = Math.PI * 2;
 const halfW = PANEL_W * 0.5, halfH = PANEL_H * 0.5;
-const margin = Math.min(PANEL_W, PANEL_H) * 0.18;
+const margin = Math.max(0.0001, Math.min(PANEL_W, PANEL_H) * RIPPLE.edgeFade);
+// bumpSharp slider maps to symmetric pow-based wave reshape:
+//   0.0 = flat plateaus (1 - (1-v)^5)
+//   0.5 = pass-through cosine
+//   1.0 = sharp spikes (v^5)
+function reshapeWave(v) {
+  if (RIPPLE.bumpSharp === 0.5) return v;
+  if (RIPPLE.bumpSharp > 0.5) {
+    const n = 1 + (RIPPLE.bumpSharp - 0.5) * 8;
+    return Math.pow(v, n);
+  }
+  const n = 1 + (0.5 - RIPPLE.bumpSharp) * 8;
+  return 1 - Math.pow(1 - v, n);
+}
 function heightAt(x, y) {
   const dx = halfW - Math.abs(x);
   const dy = halfH - Math.abs(y);
@@ -66,7 +83,8 @@ function heightAt(x, y) {
   const env = d >= margin ? 1 : 0.5 * (1 - Math.cos(Math.PI * (d / margin)));
   const r = Math.hypot(x, y);
   const ampLocal = Math.max(0, RIPPLE.amplitude - RIPPLE.step * (r / RIPPLE.wavelength));
-  const wave = 0.5 * (1 + Math.cos(TAU * r / RIPPLE.wavelength));
+  const waveRaw = 0.5 * (1 + Math.cos(TAU * r / RIPPLE.wavelength));
+  const wave = reshapeWave(waveRaw);
   return ampLocal * wave * env;
 }
 
@@ -156,14 +174,13 @@ writeFileSync(outPath, buf);
 const sizeMB = (buf.length / 1048576).toFixed(2);
 const totalH = THICKNESS + RIPPLE.amplitude;
 
-// Compute the visible peak heights for a quick sanity-check report
+// Compute the visible peak heights for a quick sanity-check report. Uses the
+// same heightAt() that built the geometry so the numbers always match the file.
 const peakHeights = [];
-for (let n = 0; n * RIPPLE.wavelength < maxD; n++) {
+const peakLimit = Math.min(halfW, halfH);  // furthest peak that still fits
+for (let n = 0; n * RIPPLE.wavelength < peakLimit; n++) {
   const r = n * RIPPLE.wavelength;
-  const ampLocal = Math.max(0, RIPPLE.amplitude - RIPPLE.step * (r / RIPPLE.wavelength));
-  const t = r - (maxD - margin);
-  const fade = t <= 0 ? 1 : Math.max(0, 0.5 * (1 + Math.cos(Math.PI * t / margin)));
-  const h = ampLocal * fade;
+  const h = heightAt(r, 0);
   if (h < 0.5) break;
   peakHeights.push(`${h.toFixed(1)}mm`);
 }
