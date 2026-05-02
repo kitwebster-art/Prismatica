@@ -127,13 +127,18 @@
     background: linear-gradient(90deg, #3af, #f0a);
     transition: width 120ms linear;
   }
-  #renderOverlay .stopBtn {
+  #renderOverlay .btnRow {
+    display: flex; gap: 12px; justify-content: center; align-items: center;
+  }
+  #renderOverlay .stopBtn, #renderOverlay .pauseBtn {
     appearance: none; background: transparent; color: #888; border: 1px solid #333;
     padding: 10px 28px; font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
     font-family: inherit; cursor: pointer; border-radius: 4px;
     transition: color 120ms, border-color 120ms;
   }
-  #renderOverlay .stopBtn:hover { color: #fff; border-color: #666; }
+  #renderOverlay .stopBtn:hover, #renderOverlay .pauseBtn:hover { color: #fff; border-color: #666; }
+  #renderOverlay .pauseBtn.paused { color: #3af; border-color: #3af; }
+  #renderOverlay .pauseBtn.paused:hover { color: #7cf; border-color: #7cf; }
   #renderOverlay .hint { color: #555; font-size: 11px; margin-top: 16px; letter-spacing: 0.08em; text-transform: uppercase; }
   /* In-overlay eco render dropdown — flip throttle level mid-render so the
      laptop can stay usable for other work while the export finishes. */
@@ -188,7 +193,10 @@
         <option value="gentle">gentle · ~25% load</option>
       </select>
     </div>
-    <button class="stopBtn" id="roStopBtn">■ Stop render</button>
+    <div class="btnRow">
+      <button class="pauseBtn" id="roPauseBtn">⏸ Pause</button>
+      <button class="stopBtn" id="roStopBtn">■ Stop</button>
+    </div>
     <div class="hint">eco can be changed mid-render · keep this tab in the foreground for fastest render</div>
   </div>
 </div>
@@ -227,7 +235,13 @@ const setStatus = (t) => { statusEl.textContent = t; };
 // -------------------------------------------------------------------------
 // Renderer + scene
 // -------------------------------------------------------------------------
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+// preserveDrawingBuffer:true is REQUIRED for reliable canvas → VideoFrame /
+// drawImage capture during the offline render. Without it the WebGL back
+// buffer can be cleared by the browser between renderFrame() and the encoder
+// readback, which manifests as random "flashing" glitches in random parts of
+// random frames (stale or empty pixels). Has a small live-perf cost but is
+// necessary for clean exports.
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -240,7 +254,14 @@ const QUALITY_PRESETS = {
   high:     { pixelRatio: 2.0, transmissionScale: 1.0 },
   ultra:    { pixelRatio: Math.min(window.devicePixelRatio, 3.0), transmissionScale: 1.0 },
 };
+// Declared here so applyRenderQuality (called at startup) can check it safely.
+// Set true at the start of renderOffline(), false when it completes.
+let offlineInProgress = false;
+
 function applyRenderQuality(name) {
+  // Never resize during an offline render — renderer.setSize() invalidates
+  // the transmission render target and causes the wavy coloured-band glitch.
+  if (offlineInProgress) return;
   const q = QUALITY_PRESETS[name] || QUALITY_PRESETS.high;
   renderer.setPixelRatio(q.pixelRatio);
   renderer.transmissionResolutionScale = q.transmissionScale;
@@ -423,9 +444,14 @@ composer.addPass(lookPass);
 
 composer.addPass(new OutputPass());
 
-function renderFrame() {
-  // Tick the grain time so the noise field shifts each frame.
-  lookPass.uniforms.uTime.value = performance.now() * 0.001;
+function renderFrame(timeOverride) {
+  // Tick the grain time so the noise field shifts each frame. During offline
+  // export we pass the frame's playback timestamp so grain advances at the
+  // EXPORT framerate (deterministic per frame). In live view we fall back to
+  // wall-clock so grain animates regardless of paused panel time.
+  lookPass.uniforms.uTime.value = (timeOverride !== undefined)
+    ? timeOverride
+    : performance.now() * 0.001;
   composer.render();
 }
 
@@ -450,6 +476,7 @@ const ledShader = {
     uSpeed:      { value: 0.5 },
     uBrightness: { value: 2.4 },
     uHueShift:   { value: 0.0 },
+    uPanelSat:   { value: 1.0 },
     uTex:        panelTexture,
     uHasTex:     hasTexture,
     uPgLineWidth:{ value: 0.06 },  // pixelgrid: gridline thickness as fraction of cell pitch
@@ -502,6 +529,7 @@ const ledShader = {
     uniform float uSpeed;
     uniform float uBrightness;
     uniform float uHueShift;
+    uniform float uPanelSat;
     uniform float uPgLineWidth;
     uniform float uPgFlow;
     uniform float uPatSharp;
@@ -642,10 +670,10 @@ const ledShader = {
         else if (uPatAxis == 5) coord = (abs(c.x) > abs(c.y)) ? uv.y : uv.x;
         else                    coord = uv.y;
         float freq = 40.0 * (0.4 + uPatScale * 1.2);
-        float v = 0.5 + 0.5 * sin(coord * freq + t * 6.0);
+        float v = 0.5 + 0.5 * sin(coord * freq + t * 1.0);
         float band = mix(0.45, 0.03, clamp(uPatSharp, 0.0, 1.0));
         v = smoothstep(0.5 - band, 0.5 + band, v);
-        col = vec3(v, v * 0.6, v * 0.3);
+        col = hsv2rgb(vec3(uHueShift, 0.75, v));
       } else if (uMode == 5) {
         vec2 q = px + floor(t * 6.0);
         float h = hash(q);
@@ -695,8 +723,7 @@ const ledShader = {
         float rings = sin((r + distort) * freq - t * 4.0);
         float band = mix(0.45, 0.03, clamp(uPatSharp, 0.0, 1.0));
         float v = smoothstep(0.5 - band, 0.5 + band, rings * 0.5 + 0.5);
-        float hue = fract(r * 4.0 + t * 0.12 + uHueShift);
-        col = hsv2rgb(vec3(hue, 0.9, v));
+        col = hsv2rgb(vec3(uHueShift, 0.9, v));
       } else if (uMode == 12) {
         // RAYS — hard-edged spokes radiating from centre. Replaced the old
         // pow(ray, 3) gradient with an antialiased smoothstep band so each ray
@@ -780,7 +807,7 @@ const ledShader = {
         // shifts the noise field for a fresh look. uPatSharp drives contrast.
         float scl = 0.7 + uPatScale * 1.6;
         vec2 q = (uv * 2.0 - 1.0) * scl + vec2(uPatSeed * 0.31, uPatSeed * 0.47);
-        float tt = t * 0.18;
+        float tt = t * 0.05;
         vec2 w1 = vec2(fbm(q + vec2(0.0, 0.0) + tt), fbm(q + vec2(5.2, 1.3) + tt));
         vec2 w2 = vec2(fbm(q + 4.0 * w1 + vec2(1.7, 9.2) + tt * 0.7),
                        fbm(q + 4.0 * w1 + vec2(8.3, 2.8) + tt * 0.7));
@@ -969,6 +996,10 @@ const ledShader = {
       if (uPanelContrast != 1.0) {
         col = (col - 0.5) * uPanelContrast + 0.5;
       }
+      if (uPanelSat != 1.0) {
+        float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
+        col = mix(vec3(lum), col, uPanelSat);
+      }
       col *= uBrightness;
       gl_FragColor = vec4(col, 1.0);
     }
@@ -1001,10 +1032,141 @@ scene.add(ledCasingB);
 
 const backdrop = new THREE.Mesh(
   new THREE.PlaneGeometry(6000, 6000),
-  new THREE.MeshBasicMaterial({ color: 0x000000 })
+  new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 1, metalness: 0 })
 );
-backdrop.position.z = -800;
+// Backdrop sits flush against the casing back face so the sculpture looks
+// wall-mounted rather than floating in space. Updated by syncBackdropZ()
+// whenever thickness or panel-gap changes. Initial value matches defaults
+// (thickness=15, panelDistance=30, casing depth=30): -(15+30+30)-2 = -77.
+backdrop.position.z = -77;
 scene.add(backdrop);
+
+// ── Wall material — procedural gallery surface textures ───────────────────
+// All presets are achromatic grays; the variation is entirely in surface
+// roughness and micro-texture so the gallery lights reveal wall character
+// without competing with the acrylic lens.
+const _wallTexCache = {};
+
+function makeWallTexture(preset) {
+  const SIZE = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = SIZE;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(SIZE, SIZE);
+  const d = imgData.data;
+
+  // Seeded value-noise at a given grid resolution — returns a sample(x,y) fn.
+  // The grid uses modular (periodic) indexing so the noise wraps seamlessly at
+  // texture tile boundaries — eliminates all visible seam lines.
+  const rng = mulberry32(preset.split('').reduce((a, c, i) => a + c.charCodeAt(0) * (i + 1), 7));
+  function makeNoise(res) {
+    const g = new Float32Array(res * res);
+    for (let i = 0; i < g.length; i++) g[i] = rng();
+    // Periodic look-up — wraps grid coordinates modulo res
+    const at = (xi, yi) => g[((yi % res + res) % res) * res + ((xi % res + res) % res)];
+    return (x, y) => {
+      const gx = x * res / SIZE, gy = y * res / SIZE;
+      const ix = gx | 0, iy = gy | 0;
+      const fx = gx - ix, fy = gy - iy;
+      const a = at(ix,   iy  );
+      const b = at(ix+1, iy  );
+      const c = at(ix,   iy+1);
+      const e = at(ix+1, iy+1);
+      const sx = fx * fx * (3 - 2 * fx);
+      const sy = fy * fy * (3 - 2 * fy);
+      return a + (b-a)*sx + (c-a)*sy + (a-b-c+e)*sx*sy;
+    };
+  }
+
+  // Per-preset config:
+  //   base — base gray level (0–255)
+  //   n    — [[gridRes, amplitude], ...] noise octaves
+  //   bandsY / bandsX — sinusoidal banding amplitude (formwork / blockwork)
+  //   sweep / wash — directional smear patterns
+  const CFG = {
+    concrete: { base: 0x84, n: [[5,22],[20,8],[80,3]],   bandsY: 6,  bandsX: 0 },
+    plaster:  { base: 0xb2, n: [[4,7], [14,4],[56,2]],   sweep: 8              },
+    polished: { base: 0x9c, n: [[6,9], [28,4],[110,2]],  bandsX: 0             },
+    cement:   { base: 0x70, n: [[5,26],[18,9],[60,4]],   bandsX: 4             },
+    limewash: { base: 0xbc, n: [[3,12],[8,8], [30,3]],   wash: 12              },
+  };
+  const cfg = CFG[preset] || CFG.concrete;
+  const noises = cfg.n.map(([res]) => makeNoise(res));
+
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      let v = cfg.base;
+      for (let ni = 0; ni < noises.length; ni++) {
+        v += (noises[ni](x, y) - 0.5) * cfg.n[ni][1] * 2;
+      }
+      if (cfg.bandsY) v += Math.sin(y * Math.PI * 2 / (SIZE / cfg.bandsY)) * 5;
+      if (cfg.bandsX) v += Math.sin(x * Math.PI * 2 / (SIZE / cfg.bandsX)) * 4;
+      // sweep / wash: frequencies chosen so exactly N full cycles fit in SIZE
+      // pixels in every direction — guarantees seamless tiling with no edge lines.
+      if (cfg.sweep)  v += Math.sin((x + 2 * y) * Math.PI * 2 / SIZE) * cfg.sweep;
+      if (cfg.wash)   v += Math.sin((x + y)     * Math.PI * 2 / SIZE) * cfg.wash;
+      const i = (y * SIZE + x) * 4;
+      d[i] = d[i+1] = d[i+2] = Math.max(0, Math.min(255, Math.round(v)));
+      d[i+3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(8, 8);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+const WALL_ROUGH    = { none:1.0, concrete:0.88, plaster:0.75, polished:0.35, cement:0.92, limewash:0.85 };
+const WALL_METAL    = { none:0,   concrete:0,    plaster:0,    polished:0.04, cement:0,    limewash:0    };
+
+function applyWallMaterial(preset) {
+  if (!backdrop) return;
+  if (preset && preset !== 'none') {
+    if (!_wallTexCache[preset]) _wallTexCache[preset] = makeWallTexture(preset);
+    const tex = _wallTexCache[preset];
+    const scale  = state.wallScale ?? 8;
+    const bright = state.wallBrightness ?? 1.0;
+    tex.repeat.set(scale, scale);
+    tex.needsUpdate = true;
+    backdrop.material = new THREE.MeshStandardMaterial({
+      color:        new THREE.Color(bright, bright, bright),
+      map:          tex,
+      roughnessMap: tex,
+      roughness:    WALL_ROUGH[preset] ?? 0.88,
+      metalness:    WALL_METAL[preset] ?? 0,
+    });
+  } else {
+    // Flat unlit background — original behaviour
+    backdrop.material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(state.bgColor),
+    });
+  }
+  backdrop.material.needsUpdate = true;
+}
+
+// Live-update wall brightness and grain scale without recreating the material.
+function applyWallAdjust() {
+  if (!backdrop?.material || !state.wallMaterial || state.wallMaterial === 'none') return;
+  const bright = state.wallBrightness ?? 1.0;
+  backdrop.material.color.setScalar(bright);
+  const tex = _wallTexCache[state.wallMaterial];
+  if (tex) {
+    const s = state.wallScale ?? 8;
+    tex.repeat.set(s, s);
+    tex.needsUpdate = true;
+  }
+}
+
+// Keep the backdrop flush with the back face of the deepest casing so the
+// sculpture always reads as wall-mounted. Call whenever thickness or
+// panelDistance changes.
+function syncBackdropZ() {
+  if (!backdrop) return;
+  const deepest = Math.max(state.thickness || 15, state.thicknessB || state.thickness || 15);
+  backdrop.position.z = -(deepest + (state.panelDistance || 30) + 30) - 2;
+}
 
 // -------------------------------------------------------------------------
 // PRNG
@@ -1681,6 +1843,7 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   panelSpeed: 0.1,   // very slow default — Kit prefers a meditative pace; bump the speed slider to taste
   panelBrightness: 2.4,
   panelHue: 0.0,
+  panelSat: 1.0,
   panelDistance: 30,
   pgLineWidth: 0.06,   // pixelgrid: black gridline thickness (fraction of cell pitch)
   pgFlow: 0.12,        // pixelgrid: drift speed (cells/sec). Default = barely-perceptible drift.
@@ -1731,6 +1894,11 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   panSpeed: 0.05,
   lensSpin: 0,
   bgColor: '#050505',
+  wallMaterial:   'none',  // none | concrete | plaster | polished | cement | limewash
+  wallBrightness:  1.0,   // 0 = black → 2 = overexposed; multiplies texture colour
+  wallScale:       8,     // texture repeat — lower = larger grain, higher = finer grain
+  envPreset:    'spots',   // studio | gallery | spots | product
+  envIntensity:  1.0,      // scene.environmentIntensity (0–4)
   bloomEnabled: false,
   // Look Grade post-processing — applied after bloom, before output. Neutral
   // defaults so the pass doesn't change the look until the user adjusts.
@@ -1763,7 +1931,8 @@ state.currentPreset = '—';
 state.reset       = () => { resetAll(); };
 state.exportSTL   = () => { doExportSTL(false); };
 state.exportSTLB  = () => { doExportSTL(true); };
-state.screenshot  = () => { doScreenshot(); };
+state.screenshot     = () => { doScreenshot(); };
+state.hiResScreenshot = () => { doHiResScreenshot(4); };
 state.exportSpec  = () => { doExportSpec(); };
 state.loadLut     = () => { document.getElementById('fileLut').click(); };
 state.clearLut    = () => { setLutTexture(null, ''); setStatus('LUT cleared'); };
@@ -1779,6 +1948,17 @@ state.toggleRecord = () => { toggleRecording(); };
 state.offlineRender = () => { renderOffline(); };
 state.saveAsDefaults = () => { saveAsDefaults(); };
 state.clearDefaults  = () => { clearDefaults(); };
+state.resetColors    = () => {
+  state.panelBrightness = 2.4; state.panelHue = 0.0; state.panelSat = 1.0; state.panelContrast = 1.0;
+  [ledMat, ledMatB].forEach(m => {
+    m.uniforms.uBrightness.value   = 2.4;
+    m.uniforms.uHueShift.value     = 0.0;
+    m.uniforms.uPanelSat.value     = 1.0;
+    m.uniforms.uPanelContrast.value = 1.0;
+  });
+  guiRefresh();
+  setStatus('color controls reset to defaults');
+};
 state.snapToLoop     = () => { snapSpeedsToLoop(); };
 state.togglePause    = () => { setAnimPaused(!animPaused); };
 state.abortOfflineRender = () => { abortOfflineRender(); };
@@ -1929,6 +2109,7 @@ function rebuildLenses() {
     ledCasingB.visible = false;
     setStatus(`${typeA.label}  ·  ${state.panelWidth}×${state.panelHeight} mm  ·  ${(geoA.attributes.position.count).toLocaleString()} verts`);
   }
+  syncBackdropZ();
   updateDimensionOverlay();
   // Re-apply shape view if it was active — the rebuild just gave us a fresh
   // mesh with the regular glass material, so the topo render needs to be
@@ -2150,11 +2331,12 @@ function presetSnapshot() {
   for (const k of [
     'lensType','panelWidth','panelHeight','resolution','smoothing','shapeScale','params',
     'ior','dispersion','thickness','roughness','tint',
-    'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelDistance','pgLineWidth','pgFlow',
+    'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelSat','panelDistance','pgLineWidth','pgFlow',
     'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
     'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
     'sqGradient','sqGradA','sqGradB','sqGradC','sqGradAxis','sqGradScale','sqGradFlow',
-    'bgColor','bloomEnabled','bloomStrength','bloomRadius','bloomThreshold','lensSpin',
+    'bgColor','wallMaterial','wallBrightness','wallScale','envPreset','envIntensity',
+    'bloomEnabled','bloomStrength','bloomRadius','bloomThreshold','lensSpin',
     'lookSaturation','lookContrast','lookVignette','lookGrain','lookSharpen','lookLutMix',
     'compare','lensTypeB','paramsB','iorB','dispersionB','thicknessB','roughnessB','tintB',
   ]) s[k] = JSON.parse(JSON.stringify(state[k]));
@@ -2176,9 +2358,14 @@ function applyPreset(p) {
   if (!('patSeed'    in p)) state.patSeed    = 0.0;
   if (!('patAxis'    in p)) state.patAxis    = 0;
   if (!('panelContrast' in p)) state.panelContrast = 1.0;
+  if (!('panelSat'      in p)) state.panelSat      = 1.0;
   if (!('shapeScale' in p)) state.shapeScale = 1.0;
   if (!('mirrorLens' in p)) state.mirrorLens = true;
   if (!('mirrorPanel' in p)) state.mirrorPanel = true;
+  if (!('envPreset' in p))    state.envPreset    = 'gallery';
+  if (!('envIntensity' in p)) state.envIntensity = 1.0;
+  // Migrate old presets that used removed env names → gallery
+  if (!['studio','gallery','spots','product'].includes(state.envPreset)) state.envPreset = 'spots';
   if (!('lookSaturation' in p)) state.lookSaturation = 1.0;
   if (!('lookContrast' in p))   state.lookContrast   = 1.0;
   if (!('lookVignette' in p))   state.lookVignette   = 0.0;
@@ -2435,6 +2622,7 @@ function syncShader() {
     m.uniforms.uSpeed.value       = state.panelSpeed;
     m.uniforms.uBrightness.value  = state.panelBrightness;
     m.uniforms.uHueShift.value    = state.panelHue;
+    m.uniforms.uPanelSat.value    = state.panelSat != null ? state.panelSat : 1.0;
     m.uniforms.uPgLineWidth.value = state.pgLineWidth != null ? state.pgLineWidth : 0.06;
     m.uniforms.uPgFlow.value      = state.pgFlow      != null ? state.pgFlow      : 0.4;
     m.uniforms.uPatSharp.value   = state.patSharp   != null ? state.patSharp   : 0.5;
@@ -2463,10 +2651,114 @@ function syncShader() {
   ledPanelB.position.z = -(state.thicknessB + state.panelDistance);
   ledCasing.position.z  = -(state.thickness  + state.panelDistance) - 15;
   ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15;
+  syncBackdropZ();
 }
 function syncScene() {
   scene.background = new THREE.Color(state.bgColor);
-  if (backdrop && backdrop.material) backdrop.material.color.set(state.bgColor);
+  // For textured wall presets the bgColor only sets the clear colour behind
+  // the 6000×6000 backdrop plane — the plane itself is unaffected. Only in
+  // 'none' mode do we need to keep the flat material colour in sync.
+  if (!state.wallMaterial || state.wallMaterial === 'none') {
+    if (backdrop && backdrop.material) backdrop.material.color.set(state.bgColor);
+  }
+}
+
+// ── Environment presets — designed to reveal acrylic curvature ──────────────
+// The rule: many small discrete light sources > a few large ones.
+// Small bright points produce distinct highlights that move relative to each
+// other as the surface curves, making every bulge and crease readable.
+// All geometry kept within ~40 units of origin (PMREM far default = 100).
+
+function _envSpot(s, x, y, z, col, pw, r = 0.85) {
+  // Emissive sphere (visible in PMREM) + matching point light.
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(r, 8, 8),
+    new THREE.MeshBasicMaterial({ color: col })
+  );
+  dot.position.set(x, y, z);
+  s.add(dot);
+  const l = new THREE.PointLight(col, pw, 70);
+  l.position.set(x, y, z);
+  s.add(l);
+}
+
+function buildEnv() {
+  if (scene.environment) scene.environment.dispose();
+  const preset = state.envPreset || 'gallery';
+  let envTex;
+
+  if (preset === 'gallery') {
+    // 4×4 grid of ceiling recessed spotlights — 16 distinct warm-white sources.
+    // Simulates a well-lit art gallery. Each spot produces its own discrete
+    // highlight on the acrylic, tracing the curvature across the surface.
+    const s = new THREE.Scene();
+    const roomMat = new THREE.MeshBasicMaterial({ color: 0x040406, side: THREE.BackSide });
+    s.add(new THREE.Mesh(new THREE.BoxGeometry(64, 30, 64), roomMat));
+    for (let xi = -1.5; xi <= 1.5; xi++) {
+      for (let zi = -1.5; zi <= 1.5; zi++) {
+        _envSpot(s, xi * 10, 13, zi * 10, 0xfff8f0, 14);
+      }
+    }
+    envTex = pmrem.fromScene(s, 0.0).texture;
+
+  } else if (preset === 'spots') {
+    // Three concentric rings of small lights at different elevations.
+    // The most information-dense option: 26 distinct sources from top,
+    // middle, and low positions. Shows curvature in every direction.
+    const s = new THREE.Scene();
+    s.add(new THREE.Mesh(
+      new THREE.SphereGeometry(45, 8, 4),
+      new THREE.MeshBasicMaterial({ color: 0x030303, side: THREE.BackSide })
+    ));
+    // Top ring: 8 bright white lights, high elevation
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      _envSpot(s, Math.cos(a) * 20, 18, Math.sin(a) * 20, 0xffffff, 22, 1.0);
+    }
+    // Middle ring: 12 lights, near horizon
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + 0.26; // offset so they don't align with top ring
+      _envSpot(s, Math.cos(a) * 26, 4, Math.sin(a) * 26, 0xfff4e8, 16, 0.9);
+    }
+    // Low ring: 6 warm-accent lights below horizon
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 0.52;
+      _envSpot(s, Math.cos(a) * 20, -13, Math.sin(a) * 20, 0xffddc0, 12, 0.8);
+    }
+    envTex = pmrem.fromScene(s, 0.0).texture;
+
+  } else if (preset === 'product') {
+    // Photography-style: key cluster top-left, fill cluster top-right, rim from back.
+    // Mimics a professional product shoot for curved glass/acrylic objects.
+    const s = new THREE.Scene();
+    s.add(new THREE.Mesh(
+      new THREE.SphereGeometry(45, 8, 4),
+      new THREE.MeshBasicMaterial({ color: 0x020202, side: THREE.BackSide })
+    ));
+    // Key softbox — cluster of 7 at top-left (simulates a large rectangular soft source)
+    const keyPositions = [
+      [-16, 16, -8], [-20, 14, -6], [-12, 14, -10],
+      [-18, 18, -4], [-14, 18, -12], [-20, 10, -10], [-12, 10, -6],
+    ];
+    for (const [x, y, z] of keyPositions) _envSpot(s, x, y, z, 0xfff8f0, 18);
+    // Fill — 4 lights at top-right, dimmer and cooler
+    const fillPositions = [[18, 12, 0], [22, 10, -4], [16, 14, 4], [20, 8, 4]];
+    for (const [x, y, z] of fillPositions) _envSpot(s, x, y, z, 0xf0f6ff, 10, 0.8);
+    // Rim — 4 lights from behind and above (creates a halo on lens edges)
+    const rimPositions = [[-4, 18, 20], [4, 18, 20], [-8, 14, 22], [8, 14, 22]];
+    for (const [x, y, z] of rimPositions) _envSpot(s, x, y, z, 0xd0e4ff, 20, 0.9);
+    // Top accent — single overhead
+    _envSpot(s, 0, 24, 0, 0xffffff, 26, 1.1);
+    envTex = pmrem.fromScene(s, 0.0).texture;
+
+  } else {
+    // Studio — neutral soft-box room (good for shape evaluation)
+    envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  }
+
+  scene.environment = envTex;
+  // scene.environmentIntensity is the correct IBL scale lever in Three.js r155+.
+  scene.environmentIntensity = (state.envIntensity != null) ? state.envIntensity : 1.0;
 }
 function syncBloom() {
   bloomPass.enabled   = !!state.bloomEnabled;
@@ -2672,6 +2964,41 @@ function doScreenshot() {
     a.click();
     setStatus('screenshot saved');
   });
+}
+
+function doHiResScreenshot(scale = 4) {
+  if (offlineInProgress) { setStatus('cannot screenshot during render — wait for it to finish'); return; }
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const hiW = Math.round(W * scale);
+  const hiH = Math.round(H * scale);
+  setStatus(`rendering ${hiW}×${hiH}…`);
+  // Upscale everything temporarily
+  renderer.setSize(hiW, hiH);
+  renderer.setPixelRatio(1);
+  camera.aspect = hiW / hiH;
+  camera.updateProjectionMatrix();
+  composer.setSize(hiW, hiH);
+  bloomPass.setSize(hiW, hiH);
+  syncLookResolution(hiW, hiH);
+  // Render at full res
+  renderFrame();
+  // Capture before restoring
+  renderer.domElement.toBlob((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `prismatica_hires_${state.lensType}_${hiW}x${hiH}_${Date.now()}.png`;
+    a.click();
+    setStatus(`hi-res PNG saved — ${hiW}×${hiH}`);
+  });
+  // Restore to viewport size
+  renderer.setSize(W, H);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
+  camera.aspect = W / H;
+  camera.updateProjectionMatrix();
+  composer.setSize(W, H);
+  bloomPass.setSize(W, H);
+  syncLookResolution(W, H);
 }
 
 // -------------------------------------------------------------------------
@@ -2882,12 +3209,24 @@ function clearShotSequence() {
   rebuildSequenceGUI();
   setStatus('cleared shot sequence');
 }
+// Return-leg transition seconds when loopable is on. Eases the camera from the
+// last shot's pose back to the first shot's pose at the END of the sequence,
+// so the video's final frame sits right next to its first frame and the clip
+// loops cleanly when played back-to-back. Disabled for 1-shot sequences (no
+// loop possible). Duration borrows state.seqDefaultTransition so the user has
+// one knob to tune it.
+function sequenceLoopReturnSec() {
+  if (!state.recLoop) return 0;
+  if (shotSequence.length < 2) return 0;
+  return Math.max(0, state.seqDefaultTransition || 0);
+}
 function sequenceTotalDuration() {
   if (shotSequence.length === 0) return 0;
   let total = shotSequence[0].holdSec || 0;
   for (let i = 1; i < shotSequence.length; i++) {
     total += (shotSequence[i].transitionSec || 0) + (shotSequence[i].holdSec || 0);
   }
+  total += sequenceLoopReturnSec();
   return Math.max(0.1, total);
 }
 
@@ -2955,6 +3294,20 @@ function evaluateSequenceAt(elapsedSec) {
     if (elapsedSec < cursor + hold) return shotSequence[i].pose;
     cursor += hold;
   }
+  // Loopable: ease from last pose back to first pose so the final frame is
+  // right next to the opening frame. Uses the same easing as the main shot
+  // transitions so the return arc feels continuous with the rest of the
+  // sequence.
+  const loopRet = sequenceLoopReturnSec();
+  if (loopRet > 0) {
+    if (elapsedSec < cursor + loopRet) {
+      const localT = (elapsedSec - cursor) / loopRet;
+      return lerpPose(shotSequence[shotSequence.length - 1].pose, shotSequence[0].pose, localT, easeFn);
+    }
+    // After return-leg fully completes we should already be at shot 0's pose;
+    // fall through and return it.
+    return shotSequence[0].pose;
+  }
   return shotSequence[shotSequence.length - 1].pose;
 }
 
@@ -2987,6 +3340,152 @@ state.seqPreview     = () => { if (sequencePlaying) stopSequencePreview(); else 
 state.seqStopPreview = () => { stopSequencePreview(); };
 state.seqClearAll    = () => { clearShotSequence(); };
 state.seqExport      = () => { renderOffline({ sequence: true }); };
+
+// ---------------------------------------------------------------------------
+// Render Queue — batch multiple render jobs for unattended overnight rendering.
+// Each job stores a full preset snapshot + shot sequence. The runner applies
+// each job's state in turn, awaits renderOffline(), then advances to the next.
+// ---------------------------------------------------------------------------
+const QUEUE_KEY = 'prismatica.renderQueue.v1';
+let renderQueue = [];
+
+function loadRenderQueue() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+    // Any job that was 'rendering' when the page closed did not finish — reset to pending.
+    renderQueue = saved.map(j => ({ ...j, status: j.status === 'rendering' ? 'pending' : j.status }));
+  } catch (_) { renderQueue = []; }
+}
+loadRenderQueue();
+
+function saveRenderQueue() {
+  try { localStorage.setItem(QUEUE_KEY, JSON.stringify(renderQueue)); } catch (_) {}
+}
+
+function addToRenderQueue() {
+  if (shotSequence.length < 1) { setStatus('add at least 1 shot to the sequence before queuing'); return; }
+  const raw  = prompt('Name this render job:', `Job ${renderQueue.length + 1}`);
+  const name = (raw || '').trim();
+  if (!name) return;
+  const job = {
+    id: Date.now(),
+    name,
+    stateSnap: presetSnapshot(),
+    sequence:  JSON.parse(JSON.stringify(shotSequence)),
+    status:    'pending',
+    addedAt:   new Date().toLocaleString()
+  };
+  renderQueue.push(job);
+  saveRenderQueue();
+  rebuildQueueGUI();
+  const p = renderQueue.filter(j => j.status === 'pending').length;
+  setStatus(`queued "${name}" — ${p} pending job${p !== 1 ? 's' : ''}`);
+}
+
+let queueRunning = false;
+async function runRenderQueue() {
+  if (queueRunning) { setStatus('queue is already running'); return; }
+  const pending = renderQueue.filter(j => j.status === 'pending');
+  if (pending.length === 0) { setStatus('no pending jobs — add some first'); return; }
+  queueRunning = true;
+  // Snapshot current working state so we can restore it once the queue finishes.
+  const restoreSnap = presetSnapshot();
+  const restoreSeq  = JSON.parse(JSON.stringify(shotSequence));
+  setStatus(`queue started — ${pending.length} job${pending.length !== 1 ? 's' : ''} to render`);
+  for (const job of pending) {
+    job.status = 'rendering';
+    saveRenderQueue();
+    rebuildQueueGUI();
+    setStatus(`rendering "${job.name}"…`);
+    try {
+      // Apply the job's saved state + sequence before rendering.
+      applyPreset(job.stateSnap);
+      shotSequence.length = 0;
+      shotSequence.push(...(job.sequence || []));
+      saveShotSequence();
+      rebuildSequenceGUI();
+      guiRefresh();
+      // Give Three.js enough time to re-bake the PMREM env map and fully upload
+      // all changed textures before starting the render. Two rAF ticks are
+      // enough for the PMREM; the 80 ms pause covers GPU texture uploads on
+      // slower machines and is imperceptible in an overnight queue.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await new Promise(r => setTimeout(r, 80));
+      await renderOffline({ sequence: true });
+      job.status = 'done';
+    } catch (err) {
+      job.status = 'error';
+      console.error('Render queue job failed:', job.name, err);
+    }
+    saveRenderQueue();
+    rebuildQueueGUI();
+  }
+  // Restore whatever the user had set up before the queue ran.
+  applyPreset(restoreSnap);
+  shotSequence.length = 0;
+  shotSequence.push(...restoreSeq);
+  saveShotSequence();
+  rebuildSequenceGUI();
+  guiRefresh();
+  queueRunning = false;
+  const done = renderQueue.filter(j => j.status === 'done').length;
+  const errs = renderQueue.filter(j => j.status === 'error').length;
+  setStatus(`queue finished — ${done} rendered${errs ? `, ${errs} failed` : ' ✓'}`);
+}
+
+function clearDoneJobs() {
+  const before = renderQueue.length;
+  renderQueue = renderQueue.filter(j => j.status !== 'done' && j.status !== 'error');
+  const removed = before - renderQueue.length;
+  saveRenderQueue();
+  rebuildQueueGUI();
+  setStatus(`cleared ${removed} completed job${removed !== 1 ? 's' : ''}`);
+}
+
+function removeQueueJob(id) {
+  renderQueue = renderQueue.filter(j => j.id !== id);
+  saveRenderQueue();
+  rebuildQueueGUI();
+}
+
+state.queueAddJob      = () => addToRenderQueue();
+state.queueRunAll      = () => runRenderQueue();
+state.queueClearDone   = () => clearDoneJobs();
+state.queueResetAll    = () => {
+  renderQueue.forEach(j => { if (j.status === 'done' || j.status === 'error') j.status = 'pending'; });
+  saveRenderQueue();
+  rebuildQueueGUI();
+  setStatus('all completed jobs reset to pending');
+};
+
+let fQueue = null;
+const queueJobFolders = [];
+function rebuildQueueGUI() {
+  if (!fQueue) return;
+  for (const f of queueJobFolders) { try { f.destroy(); } catch (_) {} }
+  queueJobFolders.length = 0;
+  // Update the summary readout line at the top of the folder.
+  if (fQueue.__qStatusCtrl && fQueue.__qStatusObj) {
+    const p = renderQueue.filter(j => j.status === 'pending').length;
+    const t = renderQueue.length;
+    fQueue.__qStatusObj._info = t === 0
+      ? 'empty — add jobs below'
+      : `${t} job${t !== 1 ? 's' : ''} · ${p} pending`;
+    fQueue.__qStatusCtrl.updateDisplay();
+  }
+  const ICON = { pending: '⏳', rendering: '🔄', done: '✅', error: '❌' };
+  for (const job of renderQueue) {
+    const fj = fQueue.addFolder(`${ICON[job.status] || '?'} ${job.name}`);
+    fj.close();
+    const seqLen = (job.sequence || []).length;
+    fj.add({ _info: `${job.status} · ${seqLen} shot${seqLen !== 1 ? 's' : ''} · ${job.addedAt}` }, '_info').name('info').disable();
+    if (job.status !== 'rendering') {
+      const acts = { remove: () => removeQueueJob(job.id) };
+      fj.add(acts, 'remove').name('× remove');
+    }
+    queueJobFolders.push(fj);
+  }
+}
 
 // --- Shot sequence GUI section — rebuilt on every add/remove/move ---
 let fSeq = null;
@@ -3028,12 +3527,18 @@ function rebuildSequenceGUI() {
     fs.add(acts, 'del').name('× delete this shot');
     seqShotFolders.push(fs);
   }
-  // Update the info controller if it exists
+  // Update the info controller if it exists. Update BOTH the underlying value
+  // (what lil-gui shows on the right) and the label, otherwise the right-side
+  // value freezes on whatever was set at construction time.
   if (fSeq.__infoCtrl) {
     const info = shotSequence.length === 0
       ? 'no shots yet — frame a view, hit "save shot"'
       : `${shotSequence.length} shots · total ${sequenceTotalDuration().toFixed(1)}s`;
-    fSeq.__infoCtrl.name(info);
+    if (fSeq.__infoObj) {
+      fSeq.__infoObj._info = info;
+      fSeq.__infoCtrl.updateDisplay();
+    }
+    fSeq.__infoCtrl.name('status');
   }
 }
 
@@ -3094,7 +3599,7 @@ normalizeState();
   const MODE_SPEED_DEFAULTS = {
     2:  0.04,  // wave: very slow
     3:  0.10,  // radial
-    4:  0.10,  // scanlines
+    4:  0.05,  // scanlines
     10: 0.20,  // spiral
     11: 0.20,  // rings
     13: 0.10,  // squares
@@ -3130,10 +3635,12 @@ normalizeState();
   // shader output BEFORE brightness, so contrast and brightness are independent.
   const ctlPanelContrast = f2.add(state, 'panelContrast', 0.5, 2.5, 0.01).name('contrast').onChange(v => { ledMat.uniforms.uPanelContrast.value = v; ledMatB.uniforms.uPanelContrast.value = v; });
   const ctlPanelHue    = f2.add(state, 'panelHue', 0.0, 1.0, 0.01).name('hue shift').onChange(v => { ledMat.uniforms.uHueShift.value = v; ledMatB.uniforms.uHueShift.value = v; });
+  const ctlPanelSat    = f2.add(state, 'panelSat',  0.0, 2.0, 0.01).name('saturation').onChange(v => { ledMat.uniforms.uPanelSat.value = v; ledMatB.uniforms.uPanelSat.value = v; });
+  f2.add(state, 'resetColors').name('↺ reset color controls');
   const ctlPgLineWidth = f2.add(state, 'pgLineWidth', 0.0, 0.4, 0.005).name('grid line thickness').onChange(v => { ledMat.uniforms.uPgLineWidth.value = v; ledMatB.uniforms.uPgLineWidth.value = v; });
   const ctlPgFlow      = f2.add(state, 'pgFlow', -5.0, 5.0, 0.01).name('grid drift speed').onChange(v => { ledMat.uniforms.uPgFlow.value = v; ledMatB.uniforms.uPgFlow.value = v; });
   const ctlMirrorPanel = f2.add(state, 'mirrorPanel').name('mirror H + V (symmetric)').onChange(v => { ledMat.uniforms.uPanelMirror.value = v ? 1 : 0; ledMatB.uniforms.uPanelMirror.value = v ? 1 : 0; });
-  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { ledPanel.position.z = -(state.thickness + state.panelDistance); ledPanelB.position.z = -(state.thicknessB + state.panelDistance); ledCasing.position.z = -(state.thickness + state.panelDistance) - 15; ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15; });
+  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { ledPanel.position.z = -(state.thickness + state.panelDistance); ledPanelB.position.z = -(state.thicknessB + state.panelDistance); ledCasing.position.z = -(state.thickness + state.panelDistance) - 15; ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15; syncBackdropZ(); });
   const ctlPanelSmooth = f2.add(state, 'panelSmooth').name('smooth panel (anti-alias)').onChange(v => { ledMat.uniforms.uPanelSmooth.value = v ? 1 : 0; ledMatB.uniforms.uPanelSmooth.value = v ? 1 : 0; });
   const ctlLoadImage   = f2.add(state, 'loadImage').name('load image…');
   const ctlLoadVideo   = f2.add(state, 'loadVideo').name('load video…');
@@ -3144,7 +3651,7 @@ normalizeState();
   // user only ever sees the controls that actually do something.
   const fPat = f2.addFolder('Pattern Detail');
   const ctlPatSharp   = fPat.add(state, 'patSharp',   0.0, 1.0, 0.005).name('sharpness').onChange(v => { ledMat.uniforms.uPatSharp.value = v; ledMatB.uniforms.uPatSharp.value = v; });
-  const ctlPatScale   = fPat.add(state, 'patScale',   0.3, 4.0, 0.01).name('scale').onChange(v => { ledMat.uniforms.uPatScale.value = v; ledMatB.uniforms.uPatScale.value = v; });
+  const ctlPatScale   = fPat.add(state, 'patScale',   0.3, 10.0, 0.01).name('scale').onChange(v => { ledMat.uniforms.uPatScale.value = v; ledMatB.uniforms.uPatScale.value = v; });
   const ctlPatDetail  = fPat.add(state, 'patDetail',  0.0, 1.0, 0.01).name('detail / intricacy').onChange(v => { ledMat.uniforms.uPatDetail.value = v; ledMatB.uniforms.uPatDetail.value = v; });
   const ctlPatDistort = fPat.add(state, 'patDistort', 0.0, 1.0, 0.01).name('distortion').onChange(v => { ledMat.uniforms.uPatDistort.value = v; ledMatB.uniforms.uPatDistort.value = v; });
   const ctlPatAxis    = fPat.add(state, 'patAxis', {
@@ -3166,7 +3673,7 @@ normalizeState();
   // shader so the GUI only ever shows things the user can actually tune.
   const MODE_USES_SCALE = new Set([1, 3, 11, 13, 19, 20, 21]);
   const MODE_USES_GRID  = new Set([1, 19, 20]);
-  const MODE_USES_HUE   = new Set([1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+  const MODE_USES_HUE   = new Set([1, 2, 3, 4, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
   const MODE_IS_MEDIA   = new Set([7, 8]);
   // Which generic Pattern Detail knobs apply to which modes.
   // Modes not listed here keep the corresponding slider hidden.
@@ -3209,6 +3716,22 @@ normalizeState();
 
   const fScene = gui2.addFolder('Scene').close();
   fScene.addColor(state, 'bgColor').name('background').onChange(syncScene);
+  fScene.add(state, 'wallMaterial', {
+    'none (flat)':          'none',
+    'bare concrete':        'concrete',
+    'smooth plaster':       'plaster',
+    'polished concrete':    'polished',
+    'raw cement':           'cement',
+    'limewash':             'limewash',
+  }).name('wall material').onChange(v => { state.wallMaterial = v; applyWallMaterial(v); });
+  fScene.add(state, 'wallBrightness', 0.0, 2.0, 0.01).name('wall brightness').onChange(applyWallAdjust);
+  fScene.add(state, 'wallScale', 2, 24, 0.5).name('texture scale (grain)').onChange(applyWallAdjust);
+  const fEnv = fScene.addFolder('Environment').close();
+  fEnv.add(state, 'envPreset', ['studio', 'gallery', 'spots', 'product']).name('preset').onChange(buildEnv);
+  fEnv.add(state, 'envIntensity', 0.0, 4.0, 0.05).name('intensity').onChange(v => {
+    state.envIntensity = v;
+    scene.environmentIntensity = v;
+  });
   // Lens spin slider removed at Kit's request — driven exclusively by the shot
   // sequence now. The state.lensSpin value stays at 0 by default; legacy saved
   // presets that set it to non-zero will still spin until reset.
@@ -3219,12 +3742,6 @@ normalizeState();
   // the eco button restores to when toggled off.
   const fLive = fScene.addFolder('Live View').close();
   fLive.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('quality (live only)').onChange(applyRenderQuality);
-
-  const fBloom = fScene.addFolder('Bloom').close();
-  fBloom.add(state, 'bloomEnabled').name('enabled').onChange(syncBloom);
-  fBloom.add(state, 'bloomStrength', 0.0, 2.0, 0.01).name('strength').onChange(syncBloom);
-  fBloom.add(state, 'bloomRadius', 0.0, 1.5, 0.01).name('radius').onChange(syncBloom);
-  fBloom.add(state, 'bloomThreshold', 0.0, 1.0, 0.01).name('threshold').onChange(syncBloom);
 
   // Look Grade — colour grade + finishing on the final composited image.
   // Applies to live view AND offline renders so the export carries your grade.
@@ -3253,8 +3770,14 @@ normalizeState();
   fSeq.add(state, 'seqDefaultTransition', 0.1, 30, 0.1).name('default transition (s)');
   fSeq.add(state, 'seqDefaultHold', 0, 5, 0.1).name('default hold (s)');
   fSeq.add(state, 'seqClearAll').name('× clear all shots');
-  // Info line — shows shot count + total duration, updated after rebuild
-  fSeq.__infoCtrl = fSeq.add({ _info: 'no shots yet — frame a view, hit "save shot"' }, '_info').name('—').disable();
+  // Info line — shows shot count + total duration, updated after every add /
+  // remove / move via rebuildSequenceGUI. We hold the bound object on the
+  // folder so the rebuild can update BOTH the controller value (right side,
+  // blue) and the label (left side) — earlier versions only updated the label
+  // and the value froze on "no shots yet…", which read as a contradiction
+  // ("2 shots … no shots yet").
+  fSeq.__infoObj  = { _info: 'no shots yet — frame a view, hit "save shot"' };
+  fSeq.__infoCtrl = fSeq.add(fSeq.__infoObj, '_info').name('status').disable();
   // Build the per-shot sub-folders now
   rebuildSequenceGUI();
 
@@ -3265,8 +3788,15 @@ normalizeState();
   fCap.add(state, 'recAspect', Object.keys(REC_ASPECTS)).name('video aspect').onChange(updateAspectOverlay);
   fCap.add(state, 'recResolution', Object.keys(REC_RESOLUTIONS)).name('output resolution');
   fCap.add(state, 'recFps', { '24 (cinematic)': 24, '30 (Instagram)': 30, '60 (smooth)': 60 }).name('video fps');
-  fCap.add(state, 'recDuration', 1, 60, 1).name('duration (s)');
-  fCap.add(state, 'recLoop').name('loopable (reels)');
+  // (duration removed — sequence duration is set per-shot via transition + hold
+  // times. state.recDuration stays in the schema for saved-preset compatibility.)
+  // Loopable: appends a return-leg from the last shot back to the first shot
+  // (length = default transition s) so the export's final frame sits next to
+  // its opening frame and the clip loops cleanly. onChange triggers a refresh
+  // so the duration readout in the Shot Sequence folder reflects the new total.
+  fCap.add(state, 'recLoop').name('loopable (reels)').onChange(() => {
+    if (typeof rebuildSequenceGUI === 'function') rebuildSequenceGUI();
+  });
   fCap.add(state, 'renderSmooth', ['off (fast)', '2× (clean)', '3× (pristine)', '4× (gallery)']).name('smoothing (SSAA)');
   // Both of these are experimental quality boosts — opt-in so an unstable render
   // doesn't silently affect your normal exports. Trial them on a short test clip first.
@@ -3279,6 +3809,15 @@ normalizeState();
   // Note: video export now happens via the Shot Sequence "🎬 export sequence as video"
   // button. The standalone offline render / stop / live record / watermark controls
   // were removed at Kit's request — sequences cover all his rendering needs.
+
+  fQueue = gui2.addFolder('Render Queue').close();
+  fQueue.add(state, 'queueAddJob').name('➕ add current sequence to queue');
+  fQueue.add(state, 'queueRunAll').name('🚀 render all pending jobs');
+  fQueue.add(state, 'queueResetAll').name('↺ reset completed → pending');
+  fQueue.add(state, 'queueClearDone').name('× clear completed');
+  fQueue.__qStatusObj  = { _info: 'empty — add jobs below' };
+  fQueue.__qStatusCtrl = fQueue.add(fQueue.__qStatusObj, '_info').name('jobs').disable();
+  rebuildQueueGUI();
 
   const fP = gui2.addFolder('Presets').close();
   presetDropdownCtrl = fP.add(state, 'currentPreset', { '—': '—' })
@@ -3318,7 +3857,8 @@ normalizeState();
   f3.add(state, 'showDimensions').name('show dimensions overlay').onChange(updateDimensionOverlay);
   f3.add(state, 'exportSTL').name('export STL (A)');
   f3.add(state, 'exportSpec').name('📄 export fabrication spec');
-  f3.add(state, 'screenshot').name('save screenshot');
+  f3.add(state, 'screenshot').name('save screenshot (viewport)');
+  f3.add(state, 'hiResScreenshot').name('📸 hi-res PNG (4×)');
   // Live FPS readout — replaces the floating fps badge that used to sit in the
   // bottom-left. .listen() polls state.fpsText each frame; .disable() makes the
   // row read-only so it can't be edited.
@@ -3366,6 +3906,8 @@ applyRenderQuality(state.renderQuality);
   // referenced anywhere in the GUI is present, regardless of preset vintage.
   normalizeState();
   rebuildLenses();
+  buildEnv();
+  applyWallMaterial(state.wallMaterial || 'none');
   guiRefresh();
   // Refresh the per-mode panel slider visibility after a preset loads its
   // panelMode. Without this, sliders that don't apply to the loaded mode (eg.
@@ -3384,6 +3926,12 @@ function syncLookResolution(w, h) {
 syncLookResolution(window.innerWidth, window.innerHeight);
 
 window.addEventListener('resize', () => {
+  // Never resize during an offline render — renderer.setSize() invalidates
+  // Three.js's internal transmission render target (the buffer the glass
+  // refraction shader samples). If a macOS event (menu bar, Dock, DPI change)
+  // fires a resize mid-render, the next frame samples an uninitialised RT and
+  // produces the characteristic wavy coloured-band glitch in the export.
+  if (offlineInProgress) return;
   renderer.setSize(window.innerWidth, window.innerHeight);
   composer.setSize(window.innerWidth, window.innerHeight);
   bloomPass.setSize(window.innerWidth, window.innerHeight);
@@ -3751,15 +4299,27 @@ function setAnimPaused(paused) {
 }
 
 // --- offline (deterministic) render to MP4 via WebCodecs + mp4-muxer ---
-let offlineInProgress = false;
+// (offlineInProgress declared earlier, before applyRenderQuality)
 let offlineAbortRequested = false;
+let offlineRenderPaused   = false;
 let autoPausedForRender = false;
 function abortOfflineRender() {
   if (!offlineInProgress) return;
   offlineAbortRequested = true;
+  offlineRenderPaused = false; // unblock the spin-wait so the loop exits cleanly
   setStatus('stopping render…');
   const stats = document.getElementById('roStats');
   if (stats) stats.textContent = 'stopping…';
+}
+function togglePauseRender() {
+  if (!offlineInProgress) return;
+  offlineRenderPaused = !offlineRenderPaused;
+  const btn = document.getElementById('roPauseBtn');
+  if (btn) {
+    btn.textContent = offlineRenderPaused ? '▶ Resume' : '⏸ Pause';
+    btn.classList.toggle('paused', offlineRenderPaused);
+  }
+  if (roTitle) roTitle.textContent = offlineRenderPaused ? 'Paused' : 'Rendering…';
 }
 
 // --- render-mode overlay: hides canvas/GUI + shows progress during export ---
@@ -3771,8 +4331,10 @@ const roTitle  = document.getElementById('roTitle');
 const roStats  = document.getElementById('roStats');
 const roBarFill = document.getElementById('roBarFill');
 const roStopBtn = document.getElementById('roStopBtn');
+const roPauseBtn = document.getElementById('roPauseBtn');
 const roEcoSelect = document.getElementById('roEcoSelect');
-if (roStopBtn) roStopBtn.addEventListener('click', () => abortOfflineRender());
+if (roStopBtn)  roStopBtn.addEventListener('click', () => abortOfflineRender());
+if (roPauseBtn) roPauseBtn.addEventListener('click', () => togglePauseRender());
 // Eco render dropdown inside the overlay — render loop reads state.ecoRender
 // live every frame, so flipping this mid-render takes effect immediately.
 // We also update the GUI controller so the value stays in sync after render.
@@ -3785,6 +4347,9 @@ function showRenderOverlay({ W, H, fps, totalFrames, mode }) {
   roTitle.textContent = mode === 'sequence' ? 'Rendering sequence…' : 'Rendering…';
   roStats.innerHTML = `<span class="num">${W}×${H}</span> · ${fps} fps · <span class="num">${totalFrames}</span> frames · preparing encoder…`;
   roBarFill.style.width = '0%';
+  // Reset pause state for the new render
+  offlineRenderPaused = false;
+  if (roPauseBtn) { roPauseBtn.textContent = '⏸ Pause'; roPauseBtn.classList.remove('paused'); }
   // Sync the dropdown to whatever the user picked in the GUI before render started.
   if (roEcoSelect) roEcoSelect.value = state.ecoRender || 'off';
   roEl.classList.add('on');
@@ -3807,6 +4372,8 @@ function hideRenderOverlay() {
   if (!roEl) return;
   roEl.classList.remove('on');
   document.body.classList.remove('render-mode');
+  offlineRenderPaused = false;
+  if (roPauseBtn) { roPauseBtn.textContent = '⏸ Pause'; roPauseBtn.classList.remove('paused'); }
 }
 async function renderOffline(opts = {}) {
   if (offlineInProgress) return;
@@ -4052,6 +4619,28 @@ async function renderOffline(opts = {}) {
     if (parts.length) console.info('[loop cycles per clip — tune speed/duration so each is close to an integer for a seamless loop]', parts.join(' · '));
   }
 
+  // --- Transmission render-target warm-up ----------------------------------
+  // After renderer.setSize() Three.js lazily recreates the transmission RT
+  // (the backbuffer the glass refraction shader samples). The RT is not fully
+  // GPU-resident until the first actual render completes. If we start encoding
+  // immediately, early frames sample an uninitialised buffer and produce
+  // the characteristic checkerboard or aliased artefacts visible in exports.
+  // Fix: render 8 un-encoded warm-up frames at the sequence start pose.
+  // The first frame gets a 64ms yield (enough for the GPU to fully complete
+  // the costly transmission RT pre-pass at 4K SSAA resolution); subsequent
+  // frames get 16ms each to drain the pipeline between them.
+  {
+    const warmT = useSequence ? (shotSequence[0]?.time ?? 0) : 0;
+    ledMat.uniforms.uTime.value  = warmT;
+    ledMatB.uniforms.uTime.value = warmT;
+    if (useSequence) { const p = evaluateSequenceAt(warmT); if (p) applyPose(p); }
+    camera.updateMatrixWorld(true);
+    for (let w = 0; w < 8; w++) {
+      renderFrame(warmT);
+      await new Promise(r => setTimeout(r, w === 0 ? 64 : 16));
+    }
+  }
+
   const startMs = performance.now();
   offlineAbortRequested = false;
   setStatus(`rendering 0 / ${totalFrames}…`);
@@ -4098,7 +4687,7 @@ async function renderOffline(opts = {}) {
           updateCameraMotion(subDt);
         }
         camera.updateMatrixWorld(true);
-        renderFrame();
+        renderFrame(subT);
         accumulateSubFrame(alpha);
       }
       recCtx.globalAlpha = 1.0;
@@ -4114,8 +4703,10 @@ async function renderOffline(opts = {}) {
         updateCameraMotion(1 / fps);
       }
       camera.updateMatrixWorld(true);
-      renderFrame();
-      if (useOffscreen) { drawRecFrame(); src = recCanvas; } else { src = renderer.domElement; }
+      renderFrame(t);
+      // recUsesOffscreen is true for BOTH the explicit-dims path AND the ssaa>1 native
+      // path — using it (not useOffscreen) ensures the downscale step is never skipped.
+      if (recUsesOffscreen) { drawRecFrame(); src = recCanvas; } else { src = renderer.domElement; }
     }
 
     let frame;
@@ -4159,6 +4750,11 @@ async function renderOffline(opts = {}) {
     if (pauseMs > 0) {
       await new Promise(r => setTimeout(r, pauseMs));
     }
+    // Pause support — spin here at 100ms ticks until the user resumes or aborts.
+    while (offlineRenderPaused && !offlineAbortRequested) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    if (offlineAbortRequested) break;
   }
 
   // Only flush + finalize if encoder is still alive; a codec error above closes it.
