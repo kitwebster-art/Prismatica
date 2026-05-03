@@ -1889,7 +1889,6 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   motionBlurSamples: 1,           // 1 = off, 4/8 = N sub-frames per output frame averaged for cinematic motion blur
   superDispersion: false,         // export-time supersample of the transmission RT for sharper rainbow refraction
   ecoRender: 'off',               // pause between frames during offline render so the laptop stays usable
-  maxQualityExport: true,
   watermarkText: '',
   autoOrbit: false,
   orbitSpeed: 0.035,
@@ -2425,7 +2424,7 @@ function saveAsDefaults() {
   const snap = presetSnapshot();
   // Also capture Capture / scene fields that aren't in the standard preset snapshot.
   for (const k of [
-    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','motionBlurSamples','superDispersion','ecoRender','maxQualityExport','panelSmooth','watermarkText',
+    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','motionBlurSamples','superDispersion','ecoRender','panelSmooth','watermarkText',
     'autoOrbit','orbitSpeed','orbitArc',
     'autoZoom','zoomAmount','zoomSpeed',
     'autoPan','panAmount','panSpeed',
@@ -3826,7 +3825,6 @@ normalizeState();
   // next to the "export sequence as video" button so the choice is in front of
   // you when you actually click render.)
   fCap.add(state, 'superDispersion').name('supersample dispersion (test)');
-  fCap.add(state, 'maxQualityExport').name('★ max transmission + smoothing');
   // Note: video export now happens via the Shot Sequence "🎬 export sequence as video"
   // button. The standalone offline render / stop / live record / watermark controls
   // were removed at Kit's request — sequences cover all his rendering needs.
@@ -4299,7 +4297,7 @@ function toggleEcoMode() {
     state.panelSmooth = false;  // saves 4× shader cost in live view
     ledMat.uniforms.uPanelSmooth.value = 0;
     ledMatB.uniforms.uPanelSmooth.value = 0;
-    // Keep maxQualityExport on so renders still come out full quality — that's the point.
+    // Exports always use max quality regardless of eco mode — that's the point.
     ecoModeActive = true;
     syncEcoBtn();
     guiRefresh();
@@ -4433,11 +4431,9 @@ async function renderOffline(opts = {}) {
     : Math.max(1, Math.min(120, state.recDuration | 0 || 10));
   const totalFrames = Math.max(1, Math.round(fps * duration));
 
-  // MAX QUALITY OVERRIDE — when on, ignore user's preview settings and crank everything
-  // up for the export. Live-view quality stays low (fast preview) but exports are gallery-grade.
-  // Note: user now picks resolution explicitly via recResolution dropdown, so maxQ no longer
-  // upscales dims — it only forces SSAA, transmission, and panel smoothing.
-  const maxQ = !!state.maxQualityExport;
+  // Exports always run at max quality — full transmission resolution + panel smoothing.
+  // The toggle was removed; this is permanently on.
+  const maxQ = true;
 
   const dims = getRecDims();
   let W, H, useOffscreen;
@@ -4905,9 +4901,8 @@ async function renderOffline(opts = {}) {
   if (autoPausedForRender) { animPaused = false; clock.getDelta(); autoPausedForRender = false; guiRefresh(); }
   hideRenderOverlay();
   const smoothTag = ssaa > 1 ? ` · SSAA ${ssaa}×` : '';
-  const maxTag = maxQ ? ' · max-Q' : '';
   const mbps = (targetBitrate / 1_000_000).toFixed(0);
-  setStatus(`offline render saved · ${W}×${H} · ${duration}s @ ${fps}fps${smoothTag}${maxTag} · ${mbps} Mbps · ${(blob.size / 1048576).toFixed(1)} MB`);
+  setStatus(`offline render saved · ${W}×${H} · ${duration}s @ ${fps}fps${smoothTag} · ${mbps} Mbps · ${(blob.size / 1048576).toFixed(1)} MB`);
 }
 
 function animate() {
