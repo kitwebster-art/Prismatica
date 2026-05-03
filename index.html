@@ -184,20 +184,11 @@
     <div class="title2" id="roTitle">Rendering…</div>
     <div class="bar"><div class="barFill" id="roBarFill"></div></div>
     <div class="stats" id="roStats">preparing encoder…</div>
-    <div class="ecoRow">
-      <label for="roEcoSelect">🌱 eco render</label>
-      <select id="roEcoSelect">
-        <option value="off">off (fastest)</option>
-        <option value="light">light · ~75% load</option>
-        <option value="half-speed">half-speed · ~50% load</option>
-        <option value="gentle">gentle · ~25% load</option>
-      </select>
-    </div>
     <div class="btnRow">
       <button class="pauseBtn" id="roPauseBtn">⏸ Pause</button>
       <button class="stopBtn" id="roStopBtn">■ Stop</button>
     </div>
-    <div class="hint">eco can be changed mid-render · keep this tab in the foreground for fastest render</div>
+    <div class="hint">keep this tab in the foreground for fastest render</div>
   </div>
 </div>
 
@@ -1888,7 +1879,6 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   renderSmooth: '2× (clean)',
   motionBlurSamples: 1,           // 1 = off, 4/8 = N sub-frames per output frame averaged for cinematic motion blur
   superDispersion: false,         // export-time supersample of the transmission RT for sharper rainbow refraction
-  ecoRender: 'off',               // pause between frames during offline render so the laptop stays usable
   watermarkText: '',
   autoOrbit: false,
   orbitSpeed: 0.035,
@@ -2424,7 +2414,7 @@ function saveAsDefaults() {
   const snap = presetSnapshot();
   // Also capture Capture / scene fields that aren't in the standard preset snapshot.
   for (const k of [
-    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','motionBlurSamples','superDispersion','ecoRender','panelSmooth','watermarkText',
+    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','motionBlurSamples','superDispersion','panelSmooth','watermarkText',
     'autoOrbit','orbitSpeed','orbitArc',
     'autoZoom','zoomAmount','zoomSpeed',
     'autoPan','panAmount','panSpeed',
@@ -3782,9 +3772,6 @@ normalizeState();
   fSeq.add(state, 'seqStopPreview').name('⏹ stop preview');
   // Eco render — sits right above the export button so it's in your face when
   // you're about to render. Throttles the export so the laptop stays usable.
-  // Combines an inter-frame pause with SSAA=1 + half-res transmission to drop
-  // per-frame GPU load. Read live, can be flipped mid-render.
-  fSeq.add(state, 'ecoRender', ['off', 'light', 'half-speed', 'gentle']).name('🌱 eco render (laptop-friendly)');
   fSeq.add(state, 'seqExport').name('🎬 export sequence as video');
   fSeq.add(state, 'seqEasing', Object.keys(EASINGS)).name('easing curve');
   fSeq.add(state, 'seqDefaultTransition', 0.1, 30, 0.1).name('default transition (s)');
@@ -4370,16 +4357,8 @@ const roStats  = document.getElementById('roStats');
 const roBarFill = document.getElementById('roBarFill');
 const roStopBtn = document.getElementById('roStopBtn');
 const roPauseBtn = document.getElementById('roPauseBtn');
-const roEcoSelect = document.getElementById('roEcoSelect');
 if (roStopBtn)  roStopBtn.addEventListener('click', () => abortOfflineRender());
 if (roPauseBtn) roPauseBtn.addEventListener('click', () => togglePauseRender());
-// Eco render dropdown inside the overlay — render loop reads state.ecoRender
-// live every frame, so flipping this mid-render takes effect immediately.
-// We also update the GUI controller so the value stays in sync after render.
-if (roEcoSelect) roEcoSelect.addEventListener('change', (e) => {
-  state.ecoRender = e.target.value;
-  guiRefresh();
-});
 function showRenderOverlay({ W, H, fps, totalFrames, mode }) {
   if (!roEl) return;
   roTitle.textContent = mode === 'sequence' ? 'Rendering sequence…' : 'Rendering…';
@@ -4388,8 +4367,6 @@ function showRenderOverlay({ W, H, fps, totalFrames, mode }) {
   // Reset pause state for the new render
   offlineRenderPaused = false;
   if (roPauseBtn) { roPauseBtn.textContent = '⏸ Pause'; roPauseBtn.classList.remove('paused'); }
-  // Sync the dropdown to whatever the user picked in the GUI before render started.
-  if (roEcoSelect) roEcoSelect.value = state.ecoRender || 'off';
   roEl.classList.add('on');
   document.body.classList.add('render-mode');
 }
@@ -4444,26 +4421,10 @@ async function renderOffline(opts = {}) {
   // (H.264 minimum alignment). Native renders never glitch so ~1 is sufficient.
   W = W & ~1; H = H & ~1;
 
-  // Eco render — combines (a) a pause after each frame so the OS can run other
-  // apps and (b) a per-frame GPU-load reduction so the pause actually translates
-  // into headroom. Declared up here so it can influence the SSAA + transmission
-  // decisions below. The pause is read from state EVERY frame so flipping the
-  // dropdown mid-render takes effect immediately.
-  const ECO_PAUSE = { off: 0, light: 60, 'half-speed': 150, gentle: 320 };
-  const ecoActive = state.ecoRender && state.ecoRender !== 'off';
-
   // Supersample factor — render at ssaa×output then downscale for clean edges.
-  // Eco render forces SSAA to 1× regardless of user setting / max-Q so per-frame
-  // GPU load drops dramatically. Combined with the inter-frame pause this gives
-  // a real laptop-friendly render. (Output resolution and quality of the lens
-  // simulation itself are unchanged — only the supersample multiplier is dropped.)
+  // SSAA is fully user-controlled via the smoothing dropdown.
   const ssaaMap = { 'off (fast)': 1, '2× (clean)': 2, '3× (pristine)': 3, '4× (gallery)': 4 };
-  const userSsaa = ssaaMap[state.renderSmooth] || 1;
-  // max-q no longer forces a minimum SSAA — it controls transmission quality and panel
-  // smoothing only. SSAA is fully user-controlled via the smoothing dropdown. This prevents
-  // max-q silently overriding a deliberate "off" setting with an expensive 3× render.
-  let ssaa = userSsaa;
-  if (ecoActive) ssaa = 1;
+  const ssaa = ssaaMap[state.renderSmooth] || 1;
   const renderW = (W * ssaa) & ~1;
   const renderH = (H * ssaa) & ~1;
 
@@ -4592,13 +4553,9 @@ async function renderOffline(opts = {}) {
   }
   // Eco render: drop the transmission RT resolution to lighten the most
   // expensive pass. Halves transmission cost vs default 1.0.
-  if (ecoActive) {
-    renderer.transmissionResolutionScale = 0.5;
-  }
   // Supersample dispersion is OPT-IN ONLY. It supersamples the transmission RT
-  // to 2× viewport for sharper rainbow fringes — but it can cause rendering
-  // glitches on some setups, so it's off by default and isn't pulled in by maxQ.
-  if (state.superDispersion && !ecoActive) {
+  // to 2× viewport for sharper rainbow fringes — can cause glitches on some setups.
+  if (state.superDispersion) {
     renderer.transmissionResolutionScale = 2.0;
   }
   const outputAspect = W / H;
@@ -4805,21 +4762,13 @@ async function renderOffline(opts = {}) {
       const pct = ((i + 1) / totalFrames * 100).toFixed(0);
       const elapsed = (performance.now() - startMs) / 1000;
       const eta = elapsed / (i + 1) * (totalFrames - i - 1);
-      const livePause = ECO_PAUSE[state.ecoRender] || 0;
-      setStatus(`rendering ${i + 1}/${totalFrames} · ${pct}% · eta ${eta.toFixed(0)}s${state.recLoop ? ' · loop' : ''}${livePause ? ` · 🌱 eco (${state.ecoRender})` : ''}`);
+      setStatus(`rendering ${i + 1}/${totalFrames} · ${pct}% · eta ${eta.toFixed(0)}s${state.recLoop ? ' · loop' : ''}`);
       updateRenderOverlay({ frame: i + 1, totalFrames, elapsedMs: performance.now() - startMs, W, H, fps });
       // Only yield for UI updates when the tab is visible — background renders
       // skip this entirely so Chrome's timer throttling doesn't stall them.
       if (!document.hidden) await new Promise(r => setTimeout(r, 0));
     }
     if (encodeError) break;
-    // Eco render — pause between frames so the OS can run other apps. Read
-    // state.ecoRender live every frame so flipping the dropdown mid-render
-    // takes effect immediately on the very next frame.
-    const pauseMs = ECO_PAUSE[state.ecoRender] || 0;
-    if (pauseMs > 0) {
-      await new Promise(r => setTimeout(r, pauseMs));
-    }
     // Pause support — spin here at 100ms ticks until the user resumes or aborts.
     while (offlineRenderPaused && !offlineAbortRequested) {
       await new Promise(r => setTimeout(r, 100));
