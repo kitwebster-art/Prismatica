@@ -321,10 +321,18 @@ controls.addEventListener('end', () => {
 // -------------------------------------------------------------------------
 // Post-processing (bloom)
 // -------------------------------------------------------------------------
+// Intermediate EffectComposer RT — NO samples (MSAA on post-processing RTs
+// causes intermittent resolve failures on some GPU/driver combos, manifesting
+// as grey-square / banding flashes on random frames in both live view and
+// exported video). Anti-aliasing is handled by renderer antialias:true and
+// the SSAA path in the offline render; we don't need MSAA here.
+// colorSpace must be NoColorSpace (linear passthrough) for intermediate RTs —
+// sRGB encoding belongs only on the final OutputPass. Combining SRGBColorSpace
+// with HalfFloatType on an intermediate buffer caused double gamma conversion
+// and out-of-range values that different drivers handle inconsistently.
 const postRT = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, {
-  samples: 4,
   type: THREE.HalfFloatType,
-  colorSpace: THREE.SRGBColorSpace,
+  colorSpace: THREE.NoColorSpace,
 });
 const composer = new EffectComposer(renderer, postRT);
 composer.setPixelRatio(renderer.getPixelRatio());
@@ -1910,6 +1918,7 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   lookLutMix:     1.0,
   lookLutName:    '',     // display only — name of currently loaded LUT
   showDimensions: false,  // dimension overlay hidden by default — toggle from Actions when needed
+  lensHidden: false,      // hide glass lens mesh (LED panel stays visible — useful for shader preview / glitch isolation)
   shapeView: false,       // matte topographic render of the lens form (instead of glass)
   ecoModeFlag: false,     // mirror of ecoModeActive for GUI binding (auto-synced)
   fpsText: '— fps',       // live readout shown in Actions folder
@@ -2114,7 +2123,8 @@ function rebuildLenses() {
   // Re-apply shape view if it was active — the rebuild just gave us a fresh
   // mesh with the regular glass material, so the topo render needs to be
   // re-bound to the new mesh.
-  if (state.shapeView && typeof applyShapeView === 'function') applyShapeView(true);
+  if (state.shapeView   && typeof applyShapeView   === 'function') applyShapeView(true);
+  if (state.lensHidden  && typeof applyLensHidden  === 'function') applyLensHidden(true);
 }
 
 // -------------------------------------------------------------------------
@@ -3013,9 +3023,11 @@ gui2.domElement.style.right = 'auto';
 gui2.domElement.style.top = '0';
 let fA = null, paramFolderA = null, paramFolderB = null, paramFolderMatB = null;
 let presetDropdownCtrl;
+let lensHideBtnCtrl = null;  // declared here so GUI builder can assign it (TDZ-safe)
 
 function guiRefresh() {
-  for (const c of gui.controllersRecursive()) c.updateDisplay();
+  for (const c of gui.controllersRecursive())  c.updateDisplay();
+  for (const c of gui2.controllersRecursive()) c.updateDisplay();
 }
 
 const PARAM_UNITS = {
@@ -3117,7 +3129,16 @@ function getRecDims() {
   let w, h;
   if (ratio >= 1) { h = short; w = Math.round(short * ratio); }
   else            { w = short; h = Math.round(short / ratio); }
-  return [w & ~1, h & ~1];
+  // Round UP to the nearest multiple of 16 — H.264 macroblocks are 16×16 px.
+  // W=1080 is NOT divisible by 16 (1080/16=67.5). If we pass a non-aligned
+  // dimension to VideoEncoder, the encoder pads internally (1080→1088) and
+  // writes SPS frame_crop parameters telling the decoder to strip those extra
+  // pixels. Chrome + mp4-muxer don't always write/honour those crop parameters
+  // correctly, producing deterministic grey-square artefacts at consistent
+  // frame positions (typically at I-frame boundaries). Rounding UP to 1088 here
+  // means the encoder receives an already-aligned frame and never needs to pad.
+  // 1920 is already 120×16 so it's unaffected. Aspect-ratio change is <0.4%.
+  return [(w + 15) & ~15, (h + 15) & ~15];
 }
 
 // =========================================================================
@@ -3805,7 +3826,7 @@ normalizeState();
   // next to the "export sequence as video" button so the choice is in front of
   // you when you actually click render.)
   fCap.add(state, 'superDispersion').name('supersample dispersion (test)');
-  fCap.add(state, 'maxQualityExport').name('★ max quality on export');
+  fCap.add(state, 'maxQualityExport').name('★ max transmission + smoothing');
   // Note: video export now happens via the Shot Sequence "🎬 export sequence as video"
   // button. The standalone offline render / stop / live record / watermark controls
   // were removed at Kit's request — sequences cover all his rendering needs.
@@ -3852,6 +3873,8 @@ normalizeState();
     }
   });
   f3.add(state, 'shapeView').name('🗺 shape view').onChange(v => applyShapeView(!!v));
+  state.toggleLensHidden = () => applyLensHidden(!state.lensHidden);
+  lensHideBtnCtrl = f3.add(state, 'toggleLensHidden').name('👁 hide lens');
   pauseBtnCtrl = f3.add(state, 'togglePause').name('⏯ pause (P)');
   f3.add(state, 'reset').name('reset');
   f3.add(state, 'showDimensions').name('show dimensions overlay').onChange(updateDimensionOverlay);
@@ -4236,6 +4259,23 @@ function applyShapeView(on) {
   btn.addEventListener('click', () => applyShapeView(!state.shapeView));
 })();
 
+// --- Lens hide/show toggle ---------------------------------------------------
+// Hides the glass mesh entirely so you can see the raw LED shader output, or
+// render a version without refraction to isolate whether the lens is causing
+// a specific artefact. The LED panel and casing stay visible.
+// (lensHideBtnCtrl declared earlier, before buildGUI, to avoid TDZ crash)
+function applyLensHidden(hidden) {
+  state.lensHidden = !!hidden;
+  const show = !hidden;
+  if (lensMesh)  lensMesh.visible  = show;
+  if (lensMeshB) lensMeshB.visible = show;
+  if (lensHideBtnCtrl) {
+    lensHideBtnCtrl.name(hidden ? '✓ lens hidden — click to restore' : '👁 hide lens');
+    guiRefresh();
+  }
+  setStatus(hidden ? 'lens hidden — LED panel visible only' : 'lens restored');
+}
+
 function toggleEcoMode() {
   if (!ecoModeActive) {
     // Enter eco: remember current live-quality knobs, then drop to lowest.
@@ -4403,7 +4443,9 @@ async function renderOffline(opts = {}) {
   let W, H, useOffscreen;
   if (dims) { W = dims[0]; H = dims[1]; useOffscreen = true; }
   else      { W = renderer.domElement.width; H = renderer.domElement.height; useOffscreen = false; }
-  // H.264 requires even dimensions
+  // For non-native renders, getRecDims() already returns multiples of 16.
+  // For native renders, W/H come from renderer.domElement — floor to even
+  // (H.264 minimum alignment). Native renders never glitch so ~1 is sufficient.
   W = W & ~1; H = H & ~1;
 
   // Eco render — combines (a) a pause after each frame so the OS can run other
@@ -4421,7 +4463,10 @@ async function renderOffline(opts = {}) {
   // simulation itself are unchanged — only the supersample multiplier is dropped.)
   const ssaaMap = { 'off (fast)': 1, '2× (clean)': 2, '3× (pristine)': 3, '4× (gallery)': 4 };
   const userSsaa = ssaaMap[state.renderSmooth] || 1;
-  let ssaa = maxQ ? Math.max(userSsaa, 3) : userSsaa;  // max-q forces ≥3×
+  // max-q no longer forces a minimum SSAA — it controls transmission quality and panel
+  // smoothing only. SSAA is fully user-controlled via the smoothing dropdown. This prevents
+  // max-q silently overriding a deliberate "off" setting with an expensive 3× render.
+  let ssaa = userSsaa;
   if (ecoActive) ssaa = 1;
   const renderW = (W * ssaa) & ~1;
   const renderH = (H * ssaa) & ~1;
@@ -4510,15 +4555,19 @@ async function renderOffline(opts = {}) {
   } catch (e) { setStatus('encoder config failed: ' + e.message); return; }
 
   // Setup offscreen canvas for aspect crop + SSAA downscale.
-  // Motion blur forces the offscreen accumulator regardless of aspect, since
-  // we average N sub-frames into recCanvas before encoding.
-  if (useOffscreen || motionBlurOn) {
-    recCanvas.width = W; recCanvas.height = H; recUsesOffscreen = true;
-    recCtx.imageSmoothingEnabled = true;
-    recCtx.imageSmoothingQuality = 'high';
-  } else {
-    recUsesOffscreen = false;
-  }
+  // ALWAYS route through recCanvas — even for native-ratio no-SSAA renders.
+  // Reason: creating VideoFrame directly from renderer.domElement (a WebGL
+  // canvas) can race with the GPU command queue on some Chrome/driver combos:
+  // composer.render() submits GPU work asynchronously, and VideoFrame(canvas)
+  // may read the canvas before the GPU has finished writing to it, producing
+  // stale or partial pixels on random frames. Routing through recCanvas forces
+  // Chrome to composite the WebGL surface into a CPU-accessible 2D buffer first
+  // (drawImage from a WebGL canvas triggers proper GPU→compositor sync), so the
+  // VideoFrame always sees a fully-rendered frame. For a 1:1 native render the
+  // drawImage is a trivial blit with no visual difference.
+  recCanvas.width = W; recCanvas.height = H; recUsesOffscreen = true;
+  recCtx.imageSmoothingEnabled = true;
+  recCtx.imageSmoothingQuality = 'high';
 
   // Save / suspend live state
   offlineInProgress = true;
@@ -4625,21 +4674,33 @@ async function renderOffline(opts = {}) {
   // GPU-resident until the first actual render completes. If we start encoding
   // immediately, early frames sample an uninitialised buffer and produce
   // the characteristic checkerboard or aliased artefacts visible in exports.
-  // Fix: render 8 un-encoded warm-up frames at the sequence start pose.
-  // The first frame gets a 64ms yield (enough for the GPU to fully complete
-  // the costly transmission RT pre-pass at 4K SSAA resolution); subsequent
-  // frames get 16ms each to drain the pipeline between them.
+  // Fix: render 4 un-encoded warm-up frames, then force a GPU-CPU sync via
+  // gl.readPixels (a 1×1 pixel readback stalls the CPU until all pending GPU
+  // work — including the transmission RT pre-pass — has fully completed).
+  // This is more reliable than setTimeout for heavy SSAA renders where a
+  // timer-based yield may expire before the GPU finishes the large RT.
   {
     const warmT = useSequence ? (shotSequence[0]?.time ?? 0) : 0;
     ledMat.uniforms.uTime.value  = warmT;
     ledMatB.uniforms.uTime.value = warmT;
     if (useSequence) { const p = evaluateSequenceAt(warmT); if (p) applyPose(p); }
     camera.updateMatrixWorld(true);
-    for (let w = 0; w < 8; w++) {
+    for (let w = 0; w < 4; w++) {
       renderFrame(warmT);
-      await new Promise(r => setTimeout(r, w === 0 ? 64 : 16));
+      await new Promise(r => setTimeout(r, 8));
     }
+    // GPU sync: stalls CPU until all submitted GL commands have completed.
+    const _gl = renderer.getContext();
+    const _syncBuf = new Uint8Array(4);
+    _gl.readPixels(0, 0, 1, 1, _gl.RGBA, _gl.UNSIGNED_BYTE, _syncBuf);
   }
+
+  // Per-frame GPU sync helper — used below for non-native renders.
+  // readPixels stalls the CPU until all pending GPU commands (including the
+  // OutputPass draw to the canvas) have completed. Pre-allocate once so we're
+  // not creating a new Uint8Array every frame.
+  const _glCtx    = renderer.getContext();
+  const _glSyncBuf = new Uint8Array(4);
 
   const startMs = performance.now();
   offlineAbortRequested = false;
@@ -4704,8 +4765,17 @@ async function renderOffline(opts = {}) {
       }
       camera.updateMatrixWorld(true);
       renderFrame(t);
-      // recUsesOffscreen is true for BOTH the explicit-dims path AND the ssaa>1 native
-      // path — using it (not useOffscreen) ensures the downscale step is never skipped.
+      // recUsesOffscreen is always true (set in render setup above), so we
+      // always drawRecFrame → recCanvas → VideoFrame. For non-native renders
+      // (useOffscreen=true) where renderer.setSize() was called, Chrome
+      // allocates a new canvas IOSurface — drawImage can race the GPU command
+      // queue and read stale pixels on some frames (intermittent grey squares).
+      // Force a CPU stall via readPixels so the IOSurface is fully written before
+      // drawImage reads it. Native renders (useOffscreen=false) use the same
+      // long-lived canvas from live view; no sync needed there.
+      if (useOffscreen) {
+        _glCtx.readPixels(0, 0, 1, 1, _glCtx.RGBA, _glCtx.UNSIGNED_BYTE, _glSyncBuf);
+      }
       if (recUsesOffscreen) { drawRecFrame(); src = recCanvas; } else { src = renderer.domElement; }
     }
 
@@ -4725,10 +4795,12 @@ async function renderOffline(opts = {}) {
 
     // Backpressure: wait for the encoder queue to drain below a safe threshold
     // before queueing more frames. This prevents GPU/encoder buildup at heavy SSAA.
+    // When the tab is hidden Chrome throttles setTimeout to ≥1s — use a tight
+    // spin-check (no yield) in that case so background renders aren't penalised.
     const queueLimit = Math.max(4, Math.min(fps, 12));
     let waitGuard = 0;
     while (encoder.encodeQueueSize > queueLimit && encoder.state !== 'closed' && !encodeError && !offlineAbortRequested && waitGuard < 1000) {
-      await new Promise(r => setTimeout(r, 8));
+      if (!document.hidden) await new Promise(r => setTimeout(r, 8));
       waitGuard++;
     }
     if (offlineAbortRequested) break;
@@ -4740,7 +4812,9 @@ async function renderOffline(opts = {}) {
       const livePause = ECO_PAUSE[state.ecoRender] || 0;
       setStatus(`rendering ${i + 1}/${totalFrames} · ${pct}% · eta ${eta.toFixed(0)}s${state.recLoop ? ' · loop' : ''}${livePause ? ` · 🌱 eco (${state.ecoRender})` : ''}`);
       updateRenderOverlay({ frame: i + 1, totalFrames, elapsedMs: performance.now() - startMs, W, H, fps });
-      await new Promise(r => setTimeout(r, 0));
+      // Only yield for UI updates when the tab is visible — background renders
+      // skip this entirely so Chrome's timer throttling doesn't stall them.
+      if (!document.hidden) await new Promise(r => setTimeout(r, 0));
     }
     if (encodeError) break;
     // Eco render — pause between frames so the OS can run other apps. Read
