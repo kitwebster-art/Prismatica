@@ -4920,9 +4920,7 @@ animate();
 // hit a temporal-dead-zone ReferenceError and the app would render a black
 // screen on load. User can press E or click the floating ⚡ eco button to flip
 // it off when they want full live-view quality.
-queueMicrotask(() => {
-  try { if (!ecoModeActive) toggleEcoMode(); } catch (e) { console.warn('eco-on at startup skipped:', e); }
-});
+// eco mode is OFF by default — user can enable via the ⚡ button or E key
 
 // -------------------------------------------------------------------------
 // Keyboard shortcuts  (H hide UI · F fullscreen · R record · Space auto-orbit
