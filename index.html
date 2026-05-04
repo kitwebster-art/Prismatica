@@ -3905,11 +3905,11 @@ applyRenderQuality(state.renderQuality);
     setStatus('loaded saved defaults');
   } else {
     const presets = loadPresets();
-    if (presets['1']) {
-      applyPreset(presets['1']);
-      state.currentPreset = '1';
+    if (presets['macro grid']) {
+      applyPreset(presets['macro grid']);
+      state.currentPreset = 'macro grid';
       refreshPresetDropdown();
-      setStatus('loaded preset "1"');
+      setStatus('loaded preset "macro grid"');
     }
   }
   // Always start with H+V mirror on regardless of saved state.
