@@ -87,6 +87,13 @@
   .lil-gui .controller.btn-active.btn-rec button { background: #ff5050 !important; box-shadow: inset 0 0 0 1px rgba(255, 80, 80, 0.7); }
   .lil-gui .controller.btn-active.btn-rec button .name { color: #2a0000 !important; }
   .fi { position: absolute; left: -9999px; }
+  /* ── Mobile: hide GUI panels, show preset bar ─────────────────────────── */
+  @media (max-width: 768px) {
+    .lil-gui { display: none !important; }
+    #ecoBtn, #shapeBtn, #hud, #fps, #dimPanel { display: none !important; }
+    #mobilePresetBar { display: flex !important; }
+  }
+
 
   /* --- render mode overlay ------------------------------------------------ */
   /* Shown during offline render. Covers canvas + GUI so the compositor has less
@@ -3912,6 +3919,39 @@ applyRenderQuality(state.renderQuality);
       setStatus('loaded preset "macro grid"');
     }
   }
+
+// ── Mobile preset bar — populate after init ──────────────────────────────
+(function initMobilePresetBar() {
+  const bar = document.getElementById('mobilePresetBar');
+  if (!bar) return;
+  const presets = loadPresets();
+  const names = Object.keys(presets);
+  if (!names.length) return;
+  names.forEach(name => {
+    const btn = document.createElement('button');
+    btn.textContent = name;
+    btn.dataset.preset = name;
+    btn.style.cssText = 'flex-shrink:0; padding:9px 16px; border-radius:20px; border:1px solid #333; background:#111; color:#ccc; font-size:13px; cursor:pointer; white-space:nowrap; -webkit-tap-highlight-color:transparent; touch-action:manipulation;';
+    btn.addEventListener('pointerdown', () => {
+      const p = loadPresets()[name];
+      if (!p) return;
+      applyPreset(p);
+      state.currentPreset = name;
+      try { guiRefresh(); } catch(e) {}
+      setStatus('loaded "' + name + '"');
+      bar.querySelectorAll('button').forEach(b => { b.style.background='#111'; b.style.color='#ccc'; b.style.borderColor='#333'; });
+      btn.style.background = '#444'; btn.style.color = '#fff'; btn.style.borderColor = '#666';
+    });
+    bar.appendChild(btn);
+  });
+  // Highlight the currently active preset on load
+  const active = state.currentPreset;
+  if (active) {
+    const ab = bar.querySelector('[data-preset="' + active + '"]');
+    if (ab) { ab.style.background='#444'; ab.style.color='#fff'; ab.style.borderColor='#666'; }
+  }
+})();
+
   // Always start with H+V mirror on regardless of saved state.
   state.mirrorLens = true;
   state.mirrorPanel = true;
@@ -4996,5 +5036,9 @@ window.__prismatica = {
   shotSequence: () => shotSequence,
 };
 </script>
+
+<!-- Mobile preset bar — visible only on small screens via media query -->
+<div id="mobilePresetBar" style="display:none; position:fixed; bottom:0; left:0; right:0; padding:12px 10px 28px; background:linear-gradient(transparent,rgba(0,0,0,0.88)); z-index:50; gap:8px; flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none;">
+</div>
 </body>
 </html>
