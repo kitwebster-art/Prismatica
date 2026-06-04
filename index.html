@@ -69,6 +69,31 @@
      stays in the DOM so all the setStatus() calls scattered through the code
      don't need rewriting; it's just visually invisible. */
   #status { display: none; }
+  #stepExportToast {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    z-index: 60; display: none; min-width: 260px; max-width: min(520px, calc(100vw - 32px));
+    padding: 10px 14px; border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;
+    background: rgba(10,10,12,0.92); color: #e8e8e8;
+    font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    box-shadow: 0 12px 44px rgba(0,0,0,0.45);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  }
+  #stepExportToast.on { display: block; }
+  #stepExportToast a { color: #74d7ff; text-decoration: none; border-bottom: 1px solid rgba(116,215,255,0.45); }
+  #stepExportToast .stepProgressMeta {
+    display: flex; justify-content: space-between; gap: 12px; margin-top: 8px;
+    color: #8f939a; font: 10px/1.2 "SF Mono", ui-monospace, Menlo, monospace;
+    letter-spacing: 0.04em; text-transform: uppercase;
+  }
+  #stepExportToast .stepProgressTrack {
+    height: 4px; margin-top: 6px; border-radius: 999px; overflow: hidden;
+    background: rgba(255,255,255,0.12);
+  }
+  #stepExportToast .stepProgressFill {
+    height: 100%; width: 0%; border-radius: inherit;
+    background: linear-gradient(90deg, #00d4ff, #ff3ca8, #ffd34d);
+    transition: width 260ms ease;
+  }
   #fps {
     position: fixed; bottom: 12px; left: 14px; z-index: 10;
     font-size: 11px; color: #888; font-family: "SF Mono", ui-monospace, Menlo, monospace;
@@ -105,7 +130,11 @@
     justify-content: center; align-items: center;
   }
   #renderOverlay.on { display: flex; }
-  body.render-mode canvas { display: none !important; }
+/* Keep the WebGL canvas in the layout during export. Hiding it with
+   display:none lets Chrome/driver combos de-prioritise or recycle the backing
+   surface, which can leak stale/partial frames into drawImage/VideoFrame. The
+   overlay covers it visually, but the canvas remains fully renderable. */
+body.render-mode canvas { opacity: 0.01 !important; pointer-events: none !important; }
   body.render-mode .lil-gui { display: none !important; }
   body.render-mode #hud, body.render-mode #fps, body.render-mode #aspectOverlay { display: none !important; }
   body.render-mode #status { display: none !important; }
@@ -184,6 +213,7 @@
   <div class="row"><span>est. mass (PMMA)</span><span id="dimMass">—</span></div>
 </div>
 <div id="status">loading…</div>
+<div id="stepExportToast" role="status" aria-live="polite"></div>
 
 <div id="renderOverlay">
   <div class="box">
@@ -195,7 +225,7 @@
       <button class="pauseBtn" id="roPauseBtn">⏸ Pause</button>
       <button class="stopBtn" id="roStopBtn">■ Stop</button>
     </div>
-    <div class="hint">keep this tab in the foreground for fastest render</div>
+    <div class="hint">rendering continues while this window is open</div>
   </div>
 </div>
 
@@ -233,13 +263,16 @@ const setStatus = (t) => { statusEl.textContent = t; };
 // -------------------------------------------------------------------------
 // Renderer + scene
 // -------------------------------------------------------------------------
-// preserveDrawingBuffer:true is REQUIRED for reliable canvas → VideoFrame /
-// drawImage capture during the offline render. Without it the WebGL back
-// buffer can be cleared by the browser between renderFrame() and the encoder
-// readback, which manifests as random "flashing" glitches in random parts of
-// random frames (stale or empty pixels). Has a small live-perf cost but is
-// necessary for clean exports.
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance', preserveDrawingBuffer: true });
+// preserveDrawingBuffer is expensive for the live playground, so keep it OFF
+// for presentation use. The hidden dedicated export tab gets `backgroundRender`
+// in its URL and turns it ON there for reliable canvas → VideoFrame capture.
+const isDedicatedRenderPage = new URLSearchParams(location.search).has('backgroundRender');
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  alpha: false,
+  powerPreference: 'high-performance',
+  preserveDrawingBuffer: isDedicatedRenderPage,
+});
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.0));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -247,11 +280,19 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 
 const QUALITY_PRESETS = {
-  eco:      { pixelRatio: 1.0, transmissionScale: 0.4 },
-  balanced: { pixelRatio: 1.5, transmissionScale: 0.7 },
-  high:     { pixelRatio: 2.0, transmissionScale: 1.0 },
-  ultra:    { pixelRatio: Math.min(window.devicePixelRatio, 3.0), transmissionScale: 1.0 },
+  eco:      { pixelRatio: 0.75, transmissionScale: 0.22 },
+  balanced: { pixelRatio: 1.0, transmissionScale: 0.32 },
+  high:     { pixelRatio: 1.5, transmissionScale: 0.45 },
+  // Ultra keeps the sharp viewport pixel ratio, but stays inside the stable
+  // transmission/refraction range. Higher transmission scales can flash stale
+  // internal refraction buffers on Chrome/GPU combinations during live orbit.
+  ultra:    { pixelRatio: Math.min(window.devicePixelRatio, 2.0), transmissionScale: 0.48 },
 };
+// Offline export still renders at the requested output/SSAA pixel dimensions,
+// but the internal MeshPhysicalMaterial transmission buffer must stay inside
+// the same stable range as live Ultra. Full 1.0 transmission buffers can flash
+// stale refraction tiles on Chrome/GPU combinations, especially at 2x+ SSAA.
+const STABLE_EXPORT_TRANSMISSION_SCALE = QUALITY_PRESETS.balanced.transmissionScale;
 // Declared here so applyRenderQuality (called at startup) can check it safely.
 // Set true at the start of renderOffline(), false when it completes.
 let offlineInProgress = false;
@@ -270,8 +311,22 @@ function applyRenderQuality(name) {
     bloomPass.setSize(window.innerWidth, window.innerHeight);
   }
 }
-// Transmission rendering is the main cost. Halve its internal render target.
-renderer.transmissionResolutionScale = 1.0;
+function setLiveQuality(name) {
+  state.renderQuality = name;
+  if (typeof ecoModeActive !== 'undefined' && ecoModeActive && name !== 'eco') {
+    ecoModeActive = false;
+    ecoPreEcoSnapshot = null;
+    syncEcoBtn();
+  }
+  applyRenderQuality(name);
+  setStatus(`live quality: ${name} · exports unchanged`);
+  guiRefresh();
+}
+// Live view uses a deliberately lower transmission render target than export.
+// Full-resolution live transmission can intermittently flash stale checker-like
+// contents on some Chrome/GPU combinations while orbiting the camera. Export
+// temporarily restores this to 1.0 for final output.
+renderer.transmissionResolutionScale = QUALITY_PRESETS.balanced.transmissionScale;
 document.getElementById('app').appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -296,8 +351,10 @@ controls.maxDistance = 6000;
 // While the user drags the camera, auto orbit/zoom/pan step aside so the
 // mouse wins. On release, the motion recenters on wherever the camera ended up.
 let userInteractingWithCamera = false;
+let liveSettleFrames = 0;
 controls.addEventListener('start', () => {
   userInteractingWithCamera = true;
+  liveSettleFrames = Math.max(liveSettleFrames, 1);
   // Undo any active pan offset so the on-screen camera position matches the
   // real world position (otherwise the drag starts from a stale point).
   if (typeof updateCameraMotion !== 'undefined' && updateCameraMotion._lastPanDy) {
@@ -307,6 +364,7 @@ controls.addEventListener('start', () => {
 });
 controls.addEventListener('end', () => {
   userInteractingWithCamera = false;
+  liveSettleFrames = Math.max(liveSettleFrames, 2);
   // Force auto-motion to recapture "home" from the new camera pose.
   orbitHomeAzimuth = null;
   orbitHomeElevation = null;
@@ -461,6 +519,16 @@ function renderFrame(timeOverride) {
   composer.render();
 }
 
+function renderLiveFrame(settleTransmission = false) {
+  renderFrame();
+  if (settleTransmission) {
+    // MeshPhysicalMaterial transmission can briefly show a stale internal
+    // transmission target when the camera moves. A second same-frame render
+    // settles that target before the browser presents the canvas.
+    renderFrame();
+  }
+}
+
 const key = new THREE.DirectionalLight(0xffffff, 1.1);
 key.position.set(400, 600, 800);
 scene.add(key);
@@ -517,7 +585,7 @@ const ledShader = {
     uSqGradAxis: { value: 0 },  // 0=radial 1=horiz 2=vert 3=diagonal 4=angle
     uSqGradScale:{ value: 1.0 },
     uSqGradFlow: { value: 0.15 },
-    uPanelSmooth:{ value: 1 },  // 0 = hard cells, 1 = 4-tap AA (kills scan-line aliasing)
+    uPanelSmooth:{ value: 1 },  // 0 = hard cells, 1 = 4-tap AA, 2 = heavy export AA
   },
   vertexShader: /* glsl */`
     varying vec2 vUv;
@@ -981,7 +1049,57 @@ const ledShader = {
     void main() {
       float t = uTime * uSpeed;
       vec3 col;
-      if (uPanelSmooth == 1) {
+      if (uPanelSmooth >= 3) {
+        // Ultra-safe export filter: 5x5 derivative blur. This is intentionally
+        // gentle-looking rather than razor-sharp, because the sharp refracted
+        // LED bands are what create the visible flash/alias artefacts.
+        vec2 dx = dFdx(vUv) * 1.75;
+        vec2 dy = dFdy(vUv) * 1.75;
+        vec3 sum = vec3(0.0);
+        sum += computeLedColor(vUv + dx * -2.0 + dy * -2.0, t);
+        sum += computeLedColor(vUv + dx * -1.0 + dy * -2.0, t);
+        sum += computeLedColor(vUv                 + dy * -2.0, t);
+        sum += computeLedColor(vUv + dx *  1.0 + dy * -2.0, t);
+        sum += computeLedColor(vUv + dx *  2.0 + dy * -2.0, t);
+        sum += computeLedColor(vUv + dx * -2.0 + dy * -1.0, t);
+        sum += computeLedColor(vUv + dx * -1.0 + dy * -1.0, t);
+        sum += computeLedColor(vUv                 + dy * -1.0, t);
+        sum += computeLedColor(vUv + dx *  1.0 + dy * -1.0, t);
+        sum += computeLedColor(vUv + dx *  2.0 + dy * -1.0, t);
+        sum += computeLedColor(vUv + dx * -2.0, t);
+        sum += computeLedColor(vUv + dx * -1.0, t);
+        sum += computeLedColor(vUv, t) * 2.0;
+        sum += computeLedColor(vUv + dx *  1.0, t);
+        sum += computeLedColor(vUv + dx *  2.0, t);
+        sum += computeLedColor(vUv + dx * -2.0 + dy *  1.0, t);
+        sum += computeLedColor(vUv + dx * -1.0 + dy *  1.0, t);
+        sum += computeLedColor(vUv                 + dy *  1.0, t);
+        sum += computeLedColor(vUv + dx *  1.0 + dy *  1.0, t);
+        sum += computeLedColor(vUv + dx *  2.0 + dy *  1.0, t);
+        sum += computeLedColor(vUv + dx * -2.0 + dy *  2.0, t);
+        sum += computeLedColor(vUv + dx * -1.0 + dy *  2.0, t);
+        sum += computeLedColor(vUv                 + dy *  2.0, t);
+        sum += computeLedColor(vUv + dx *  1.0 + dy *  2.0, t);
+        sum += computeLedColor(vUv + dx *  2.0 + dy *  2.0, t);
+        col = sum / 26.0;
+      } else if (uPanelSmooth >= 2) {
+        // Heavy export filter: wider 3x3 derivative kernel. It softens the
+        // razor-thin panel features that shimmer into RGB checker blocks once
+        // refracted, downscaled, and H.264 encoded.
+        vec2 dx = dFdx(vUv) * 2.25;
+        vec2 dy = dFdy(vUv) * 2.25;
+        col = (
+          computeLedColor(vUv, t) * 2.0 +
+          computeLedColor(vUv - dx, t) +
+          computeLedColor(vUv + dx, t) +
+          computeLedColor(vUv - dy, t) +
+          computeLedColor(vUv + dy, t) +
+          computeLedColor(vUv - dx - dy, t) +
+          computeLedColor(vUv + dx - dy, t) +
+          computeLedColor(vUv - dx + dy, t) +
+          computeLedColor(vUv + dx + dy, t)
+        ) * 0.1;
+      } else if (uPanelSmooth == 1) {
         // 4-tap sub-pixel AA: sample the panel at ±0.25 screen-pixel offsets
         // and average. Kills cell-boundary aliasing / moiré / scan-line effects
         // when the panel is viewed at a distance or at a steep angle.
@@ -1241,8 +1359,11 @@ const LENS_TYPES = {
   ripple_field: {
     label: 'Ripple Field',
     params: {
-      wavelength: { value: 70, min: 20, max: 200, step: 1 },
-      amplitude:  { value: 8,  min: 0,  max: 100, step: 0.5 },
+      wavelength:     { value: 70, min: 20, max: 200, step: 1 },
+      amplitude:      { value: 8,  min: 0,  max: 100, step: 0.5 },
+      bulb_roundness: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'bulb roundness' },
+      curve_strength: { value: 1.0, min: 0.25, max: 3.0, step: 0.05, label: 'curve strength' },
+      edge_taper:     { value: 90, min: 0, max: 250, step: 1, label: 'edge flat taper (mm)' },
     },
     // Constant-amplitude concentric ripples covering the FULL panel rectangle,
     // fading smoothly to flat in a margin near each edge. (Earlier this used a
@@ -1252,16 +1373,21 @@ const LENS_TYPES = {
     fn: (p, W, H) => {
       const TAU = Math.PI * 2;
       const halfW = W * 0.5, halfH = H * 0.5;
-      const margin = Math.min(W, H) * 0.18;  // last 18% of each edge fades to flat
+      const margin = Math.max(0, p.edge_taper ?? Math.min(W, H) * 0.18);
+      const roundness = Math.max(0.25, p.bulb_roundness ?? 1.0);
+      const curveStrength = Math.max(0.25, p.curve_strength ?? 1.0);
       return (x, y) => {
         const dx = halfW - Math.abs(x);
         const dy = halfH - Math.abs(y);
         const d = Math.min(dx, dy);
         if (d <= 0) return 0;
-        const env = d >= margin ? 1 : 0.5 * (1 - Math.cos(Math.PI * (d / margin)));
+        const tEdge = margin <= 0 ? 1 : Math.min(1, Math.max(0, d / margin));
+        const env = tEdge * tEdge * (3 - 2 * tEdge);
         const r = Math.hypot(x, y);
         const wave = 0.5 * (1 + Math.cos(TAU * r / p.wavelength));
-        return p.amplitude * wave * env;
+        const rounded = Math.pow(wave, 1 / roundness);
+        const curved = Math.pow(rounded, curveStrength);
+        return p.amplitude * curved * env;
       };
     },
   },
@@ -1751,6 +1877,38 @@ function makeLensMaterial() {
 }
 const lensMaterial  = makeLensMaterial();
 const lensMaterialB = makeLensMaterial();
+function makeExportLensMaterial() {
+  return new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    metalness: 0.0,
+    roughness: 0.015,
+    transmission: 0.0,
+    transparent: true,
+    opacity: 0.44,
+    depthWrite: false,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.02,
+    specularIntensity: 1.0,
+    side: THREE.FrontSide,
+  });
+}
+const exportLensMaterial  = makeExportLensMaterial();
+const exportLensMaterialB = makeExportLensMaterial();
+function syncExportLensMaterials() {
+  exportLensMaterial.color.set(state.tint);
+  exportLensMaterial.roughness = Math.max(0.005, state.roughness);
+  exportLensMaterialB.color.set(state.tintB);
+  exportLensMaterialB.roughness = Math.max(0.005, state.roughnessB);
+}
+function applyStableLiveLensMaterial(on) {
+  if (state.shapeView || offlineInProgress) return;
+  // Keep the real refractive material in live view. Swapping to the simplified
+  // export material while dragging stopped one class of flash, but it also made
+  // the LED panel disappear behind a flat grey preview. The live stabilisation
+  // now relies on lower transmission resolution plus double-render settling.
+  if (lensMesh) lensMesh.material = lensMaterial;
+  if (lensMeshB) lensMeshB.material = lensMaterialB;
+}
 
 // --- Shape-view material -----------------------------------------------------
 // Opaque matte "clay" with topographic colour ramp + contour lines for sense-
@@ -1877,13 +2035,17 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   sqGradScale: 1.0,
   sqGradFlow: 0.15,
   panelSmooth: true,
-  renderQuality: 'high',
+  presentationMode: false,
+  renderQuality: 'balanced',
   recAspect: 'native',
   recResolution: '1080p (Full HD)',
   recFps: 30,
   recDuration: 10,
   recLoop: false,
+  renderFolderLabel: 'Downloads',
+  backgroundRenderStatus: 'idle',
   renderSmooth: '2× (clean)',
+  exportStability: 'extra clean (anti-glitch)',
   motionBlurSamples: 1,           // 1 = off, 4/8 = N sub-frames per output frame averaged for cinematic motion blur
   superDispersion: false,         // export-time supersample of the transmission RT for sharper rainbow refraction
   watermarkText: '',
@@ -1936,6 +2098,8 @@ state.currentPreset = '—';
 state.reset       = () => { resetAll(); };
 state.exportSTL   = () => { doExportSTL(false); };
 state.exportSTLB  = () => { doExportSTL(true); };
+state.exportSTEP  = () => { doExportFabricatorCleanSTEP(); };
+state.exportSTEPB = () => { doExportSTEP(true); };
 state.screenshot     = () => { doScreenshot(); };
 state.hiResScreenshot = () => { doHiResScreenshot(4); };
 state.exportSpec  = () => { doExportSpec(); };
@@ -1945,12 +2109,15 @@ state.loadImage   = () => { document.getElementById('fileImage').click(); };
 state.loadVideo   = () => { document.getElementById('fileVideo').click(); };
 state.clearMedia  = () => { clearMedia(); };
 state.savePreset  = () => { savePresetPrompt(); };
+state.updatePreset = () => { updateCurrentPreset(); };
 state.loadLogo    = () => { document.getElementById('fileLogo').click(); };
 state.deletePreset = () => { deleteCurrentPreset(); };
 state.exportPresets = () => { exportAllPresets(); };
 state.importPresets = () => { document.getElementById('fileImport').click(); };
 state.toggleRecord = () => { toggleRecording(); };
 state.offlineRender = () => { renderOffline(); };
+state.selectRenderFolder = () => { selectRenderFolder(); };
+state.clearRenderFolder = () => { clearRenderFolder(); };
 state.saveAsDefaults = () => { saveAsDefaults(); };
 state.clearDefaults  = () => { clearDefaults(); };
 state.resetColors    = () => {
@@ -1966,6 +2133,7 @@ state.resetColors    = () => {
 };
 state.snapToLoop     = () => { snapSpeedsToLoop(); };
 state.togglePause    = () => { setAnimPaused(!animPaused); };
+state.togglePresentationMode = () => { togglePresentationMode(); };
 state.abortOfflineRender = () => { abortOfflineRender(); };
 state.toggleEcoMode  = () => { toggleEcoMode(); };
 // --- Shot sequence action stubs (populated after the functions are declared) ---
@@ -1973,6 +2141,8 @@ state.seqAddShot     = () => {};
 state.seqPreview     = () => {};
 state.seqStopPreview = () => {};
 state.seqExport      = () => {};
+state.seqExportFrames = () => {};
+state.renderSelfTest = () => {};
 state.seqClearAll    = () => {};
 state.seqEasing      = 'ease-in-out';
 state.seqDefaultTransition = 10.0;
@@ -2360,6 +2530,19 @@ function presetSnapshot() {
   ]) s[k] = JSON.parse(JSON.stringify(state[k]));
   return s;
 }
+function renderStateSnapshot() {
+  const snap = presetSnapshot();
+  // Capture/export settings live outside the normal visual preset, but the
+  // dedicated render process needs them to reproduce the user's exact setup.
+  for (const k of [
+    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','exportStability','motionBlurSamples','superDispersion','panelSmooth','watermarkText',
+    'autoOrbit','orbitSpeed','orbitArc',
+    'autoZoom','zoomAmount','zoomSpeed',
+    'autoPan','panAmount','panSpeed',
+    'lensSpin',
+  ]) snap[k] = JSON.parse(JSON.stringify(state[k]));
+  return snap;
+}
 function applyPreset(p) {
   for (const k in p) state[k] = JSON.parse(JSON.stringify(p[k]));
   // Migrate older presets that predate these fields to the current defaults.
@@ -2433,7 +2616,7 @@ function saveAsDefaults() {
   const snap = presetSnapshot();
   // Also capture Capture / scene fields that aren't in the standard preset snapshot.
   for (const k of [
-    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','motionBlurSamples','superDispersion','panelSmooth','watermarkText',
+    'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','exportStability','motionBlurSamples','superDispersion','panelSmooth','watermarkText',
     'autoOrbit','orbitSpeed','orbitArc',
     'autoZoom','zoomAmount','zoomSpeed',
     'autoPan','panAmount','panSpeed',
@@ -2484,6 +2667,25 @@ function savePresetPrompt() {
   refreshPresetDropdown();
   guiRefresh();
   setStatus(`saved preset "${name}"`);
+}
+function updateCurrentPreset() {
+  const name = state.currentPreset;
+  if (!name || name === '—') {
+    setStatus('choose a preset first, then update it');
+    return;
+  }
+  const presets = loadPresets();
+  if (!(name in presets)) {
+    setStatus(`preset "${name}" not found — use "save as…" instead`);
+    refreshPresetDropdown();
+    return;
+  }
+  presets[name] = presetSnapshot();
+  savePresets(presets);
+  state.currentPreset = name;
+  refreshPresetDropdown();
+  guiRefresh();
+  setStatus(`updated preset "${name}"`);
 }
 function deleteCurrentPreset() {
   const n = state.currentPreset;
@@ -2573,6 +2775,7 @@ function setLutTexture(lut, name) {
     lookPass.uniforms.uLutSize.value = lut.size;
     state.lookLutName = name || '';
   }
+  syncLook();
   guiRefresh();
 }
 
@@ -2788,12 +2991,27 @@ function syncBloom() {
 // state reset / preset application / migration backfill.
 function syncLook() {
   if (!lookPass) return;
-  lookPass.uniforms.uSaturation.value = state.lookSaturation != null ? state.lookSaturation : 1.0;
-  lookPass.uniforms.uContrast.value   = state.lookContrast   != null ? state.lookContrast   : 1.0;
-  lookPass.uniforms.uVignette.value   = state.lookVignette   != null ? state.lookVignette   : 0.0;
-  lookPass.uniforms.uGrain.value      = state.lookGrain      != null ? state.lookGrain      : 0.0;
-  lookPass.uniforms.uSharpen.value    = state.lookSharpen    != null ? state.lookSharpen    : 0.0;
-  lookPass.uniforms.uLutMix.value     = state.lookLutMix     != null ? state.lookLutMix     : 1.0;
+  const saturation = state.lookSaturation != null ? state.lookSaturation : 1.0;
+  const contrast   = state.lookContrast   != null ? state.lookContrast   : 1.0;
+  const vignette   = state.lookVignette   != null ? state.lookVignette   : 0.0;
+  const grain      = state.lookGrain      != null ? state.lookGrain      : 0.0;
+  const sharpen    = state.lookSharpen    != null ? state.lookSharpen    : 0.0;
+  const lutMix     = state.lookLutMix     != null ? state.lookLutMix     : 1.0;
+  lookPass.uniforms.uSaturation.value = saturation;
+  lookPass.uniforms.uContrast.value   = contrast;
+  lookPass.uniforms.uVignette.value   = vignette;
+  lookPass.uniforms.uGrain.value      = grain;
+  lookPass.uniforms.uSharpen.value    = sharpen;
+  lookPass.uniforms.uLutMix.value     = lutMix;
+  const hasLut = !!lookPass.uniforms.tLut.value && lookPass.uniforms.uLutSize.value > 1.5 && lutMix > 0.001;
+  const isNeutral =
+    Math.abs(saturation - 1.0) < 0.001 &&
+    Math.abs(contrast - 1.0) < 0.001 &&
+    vignette < 0.001 &&
+    grain < 0.001 &&
+    sharpen < 0.001 &&
+    !hasLut;
+  lookPass.enabled = !isNeutral && !state.shapeView;
 }
 function resetAll() {
   const d = defaultStateSnapshot();
@@ -2809,9 +3027,9 @@ function resetAll() {
 // -------------------------------------------------------------------------
 // STL export
 // -------------------------------------------------------------------------
-function buildSolidForExport(isB) {
+function buildSolidForExport(isB, resolutionOverride = null) {
   const W = state.panelWidth, H = state.panelHeight;
-  const res = Math.min(state.resolution, 2.0);
+  const res = resolutionOverride != null ? resolutionOverride : Math.min(state.resolution, 2.0);
   const nx = Math.max(4, Math.floor(W / res) + 1);
   const ny = Math.max(4, Math.floor(H / res) + 1);
   const type = LENS_TYPES[isB ? state.lensTypeB : state.lensType];
@@ -2874,6 +3092,229 @@ function doExportSTL(isB) {
     solid.geometry.dispose();
     setStatus(`exported ${fname}`);
   } catch (e) { console.error(e); setStatus('export failed — see console'); }
+}
+
+function sanitiseStepString(s) {
+  return String(s).replace(/'/g, "''").replace(/[\r\n]/g, ' ');
+}
+function stepFloat(n) {
+  if (!Number.isFinite(n)) return '0.';
+  const s = Number(n).toFixed(6).replace(/\.?0+$/, '');
+  return s.includes('.') ? s : `${s}.`;
+}
+function buildStepFacetedBrep(solid, name) {
+  const geometry = solid.geometry;
+  const pos = geometry.getAttribute('position');
+  const index = geometry.getIndex();
+  if (!pos || !index) throw new Error('STEP export requires indexed position geometry');
+
+  const lines = [];
+  let id = 1;
+  const add = (body) => {
+    const entity = `#${id}=${body};`;
+    lines.push(entity);
+    return id++;
+  };
+
+  const appCtx = add(`APPLICATION_CONTEXT('configuration controlled 3d designs of mechanical parts and assemblies')`);
+  add(`APPLICATION_PROTOCOL_DEFINITION('international standard','config_control_design',1994,#${appCtx})`);
+  const prodCtx = add(`PRODUCT_CONTEXT('',#${appCtx},'mechanical')`);
+  const product = add(`PRODUCT('${sanitiseStepString(name)}','${sanitiseStepString(name)}','',(#${prodCtx}))`);
+  const formation = add(`PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE('','',#${product},.NOT_KNOWN.)`);
+  const designCtx = add(`DESIGN_CONTEXT('',#${appCtx},'design')`);
+  const productDef = add(`PRODUCT_DEFINITION('design','',#${formation},#${designCtx})`);
+  const productShape = add(`PRODUCT_DEFINITION_SHAPE('','',#${productDef})`);
+  const mmUnit = add(`(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))`);
+  const angleUnit = add(`(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))`);
+  const solidAngleUnit = add(`(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())`);
+  const repCtx = add(`(GEOMETRIC_REPRESENTATION_CONTEXT(3)GLOBAL_UNIT_ASSIGNED_CONTEXT((#${mmUnit},#${angleUnit},#${solidAngleUnit}))REPRESENTATION_CONTEXT('Prismatica mm context','3D model space'))`);
+
+  const vertexIds = [];
+  for (let i = 0; i < pos.count; i++) {
+    const point = add(`CARTESIAN_POINT('',(${stepFloat(pos.getX(i))},${stepFloat(pos.getY(i))},${stepFloat(pos.getZ(i))}))`);
+    vertexIds.push(add(`VERTEX_POINT('',#${point})`));
+  }
+
+  const faceIds = [];
+  for (let i = 0; i < index.count; i += 3) {
+    const a = vertexIds[index.getX(i)];
+    const b = vertexIds[index.getX(i + 1)];
+    const c = vertexIds[index.getX(i + 2)];
+    const loop = add(`POLY_LOOP('',(#${a},#${b},#${c}))`);
+    const bound = add(`FACE_OUTER_BOUND('',#${loop},.T.)`);
+    faceIds.push(add(`FACE('',(#${bound}))`));
+  }
+
+  const shell = add(`CLOSED_SHELL('',(${faceIds.map(n => `#${n}`).join(',')}))`);
+  const brep = add(`FACETED_BREP('${sanitiseStepString(name)}',#${shell})`);
+  const shapeRep = add(`SHAPE_REPRESENTATION('${sanitiseStepString(name)}',(#${brep}),#${repCtx})`);
+  add(`SHAPE_DEFINITION_REPRESENTATION(#${productShape},#${shapeRep})`);
+
+  const now = new Date().toISOString();
+  return [
+    'ISO-10303-21;',
+    'HEADER;',
+    "FILE_DESCRIPTION(('Prismatica V2 faceted BREP STEP export'),'2;1');",
+    `FILE_NAME('${sanitiseStepString(name)}.step','${now}',('Studio Kit Webster'),('Studio Kit Webster'),'Prismatica Visualiser','Codex','');`,
+    "FILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));",
+    'ENDSEC;',
+    'DATA;',
+    ...lines,
+    'ENDSEC;',
+    'END-ISO-10303-21;',
+    ''
+  ].join('\n');
+}
+async function saveExportToProject(filename, content) {
+  const resp = await fetch('/api/save-export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, content })
+  });
+  const data = await resp.json();
+  if (!resp.ok || !data.ok) throw new Error(data.error || 'save failed');
+  return data.path;
+}
+
+const stepExportToast = document.getElementById('stepExportToast');
+let stepExportToastTimer = null;
+let stepExportProgressFill = null;
+let stepExportProgressPct = null;
+let stepExportProgressLabel = null;
+let stepExportProgressTimer = null;
+function showStepExportToast(message, linkUrl = null, opts = {}) {
+  if (!stepExportToast) return;
+  clearTimeout(stepExportToastTimer);
+  stepExportToast.textContent = '';
+  const span = document.createElement('span');
+  span.textContent = message;
+  stepExportToast.appendChild(span);
+  if (linkUrl) {
+    stepExportToast.appendChild(document.createTextNode(' '));
+    const a = document.createElement('a');
+    a.href = linkUrl;
+    a.download = opts.filename || '';
+    a.textContent = 'download ZIP';
+    stepExportToast.appendChild(a);
+    stepExportToastTimer = setTimeout(() => stepExportToast.classList.remove('on'), 20000);
+  }
+  if (opts.progress != null) {
+    const meta = document.createElement('div');
+    meta.className = 'stepProgressMeta';
+    stepExportProgressLabel = document.createElement('span');
+    stepExportProgressLabel.textContent = opts.label || 'CAD build';
+    stepExportProgressPct = document.createElement('span');
+    meta.appendChild(stepExportProgressLabel);
+    meta.appendChild(stepExportProgressPct);
+    const track = document.createElement('div');
+    track.className = 'stepProgressTrack';
+    stepExportProgressFill = document.createElement('div');
+    stepExportProgressFill.className = 'stepProgressFill';
+    track.appendChild(stepExportProgressFill);
+    stepExportToast.appendChild(meta);
+    stepExportToast.appendChild(track);
+    updateStepExportProgress(opts.progress, opts.label);
+  } else {
+    stepExportProgressFill = null;
+    stepExportProgressPct = null;
+    stepExportProgressLabel = null;
+  }
+  stepExportToast.classList.add('on');
+}
+function updateStepExportProgress(progress, label = null) {
+  const pct = Math.max(0, Math.min(100, Math.round(progress)));
+  if (stepExportProgressFill) stepExportProgressFill.style.width = `${pct}%`;
+  if (stepExportProgressPct) stepExportProgressPct.textContent = `${pct}%`;
+  if (label && stepExportProgressLabel) stepExportProgressLabel.textContent = label;
+}
+function startStepExportProgress() {
+  clearInterval(stepExportProgressTimer);
+  const started = performance.now();
+  updateStepExportProgress(4, 'Preparing CAD');
+  stepExportProgressTimer = setInterval(() => {
+    const elapsed = (performance.now() - started) / 1000;
+    const estimate = 90 * (1 - Math.exp(-elapsed / 72));
+    const label = elapsed < 25 ? 'Checking visualizer match' : elapsed < 120 ? 'Building solid' : 'Writing STEP';
+    updateStepExportProgress(Math.min(92, 4 + estimate), label);
+  }, 500);
+}
+function finishStepExportProgress(ok) {
+  clearInterval(stepExportProgressTimer);
+  stepExportProgressTimer = null;
+  updateStepExportProgress(ok ? 100 : 0, ok ? 'Ready' : 'Failed');
+}
+
+async function doExportSTEP(isB) {
+  let solid;
+  try {
+    const stepResolution = Math.max(state.resolution, 2.0);
+    setStatus(`building STEP solid for export (${isB ? 'B' : 'A'} · ${stepResolution}mm grid)…`);
+    solid = buildSolidForExport(isB, stepResolution);
+    const which = isB ? state.lensTypeB : state.lensType;
+    const baseName = `prismatica_${which}${isB ? '_B' : ''}_${state.panelWidth}x${state.panelHeight}`;
+    const step = buildStepFacetedBrep(solid, baseName);
+    const blob = new Blob([step], { type: 'model/step' });
+    const a = document.createElement('a');
+    const fname = `${baseName}.step`;
+    a.href = URL.createObjectURL(blob); a.download = fname; a.click();
+    setStatus(`exported ${fname}; saving project copy…`);
+    const savedPath = await saveExportToProject(fname, step);
+    setStatus(`exported ${fname} and saved copy to ${savedPath}`);
+  } catch (e) {
+    console.error(e);
+    setStatus(`STEP export failed — ${e.message || 'see console'}`);
+  } finally {
+    if (solid) solid.geometry.dispose();
+  }
+}
+
+async function doExportFabricatorCleanSTEP() {
+  try {
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') {
+      showStepExportToast('Open the Railway app to use clean STEP export.');
+      setStatus('clean STEP export needs the Railway/local server');
+      return;
+    }
+    if (location.hostname.includes('github.io')) {
+      showStepExportToast('This static GitHub version cannot build STEP files. Use the Railway app.');
+      setStatus('clean STEP export needs the Railway app');
+      return;
+    }
+    showStepExportToast('Building clean STEP for fabricator… this can take 2-4 minutes.', null, { progress: 4, label: 'Preparing CAD' });
+    startStepExportProgress();
+    setStatus('building clean machinable STEP solid…');
+    const cadState = {
+      lensType: state.lensType,
+      panelWidth: state.panelWidth,
+      panelHeight: state.panelHeight,
+      resolution: state.resolution,
+      smoothing: state.smoothing,
+      shapeScale: state.shapeScale,
+      mirrorLens: state.mirrorLens,
+      thickness: state.thickness,
+      params: { ...state.params },
+    };
+    const resp = await fetch('/api/build-clean-step', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state: cadState }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'clean STEP build failed');
+
+    const downloadUrl = new URL(data.zipUrl || data.stepUrl, location.href).href;
+    finishStepExportProgress(true);
+    showStepExportToast('Clean STEP ready.', downloadUrl, { progress: 100, label: 'Ready', filename: data.filename || '' });
+    setStatus(`clean STEP ready · validated solid saved to ${data.path}`);
+    // Navigating to the generated ZIP is more reliable than an async synthetic
+    // click; Chrome treats it as a normal file download instead of a popup.
+    setTimeout(() => { window.location.href = downloadUrl; }, 150);
+  } catch (e) {
+    console.error(e);
+    finishStepExportProgress(false);
+    showStepExportToast(`Clean STEP failed: ${e.message || 'see console'}`, null, { progress: 0, label: 'Failed' });
+    setStatus(`clean STEP failed — ${e.message || 'see console'}`);
+  }
 }
 
 // Generate a fabrication brief markdown for the manufacturer. Walks the lens
@@ -3101,6 +3542,7 @@ function buildParamFolders() {
   paramFolderMatB.add(state, 'roughnessB', 0, 0.5, 0.005).name('roughness').onChange(syncMaterials);
   paramFolderMatB.addColor(state, 'tintB').name('tint').onChange(syncMaterials);
   paramFolderMatB.add(state, 'exportSTLB').name('export STL (B)');
+  paramFolderMatB.add(state, 'exportSTEPB').name('export STEP (B)');
 }
 
 function refreshPresetDropdown() {
@@ -3128,11 +3570,11 @@ const REC_RESOLUTIONS = {
   '1080p (Full HD)': 1080,
   '1440p (2K)':      1440,
   '2160p (4K)':      2160,
-  '4320p (8K)':      4320,
 };
 function getRecDims() {
   const ratio = REC_ASPECTS[state.recAspect];
   if (ratio == null) return null;  // native — computed from renderer canvas at render time
+  if (!(state.recResolution in REC_RESOLUTIONS)) state.recResolution = '2160p (4K)';
   const short = REC_RESOLUTIONS[state.recResolution] || 1080;
   let w, h;
   if (ratio >= 1) { h = short; w = Math.round(short * ratio); }
@@ -3368,7 +3810,9 @@ state.seqAddShot     = () => { addShotToSequence(); };
 state.seqPreview     = () => { if (sequencePlaying) stopSequencePreview(); else playSequencePreview(); };
 state.seqStopPreview = () => { stopSequencePreview(); };
 state.seqClearAll    = () => { clearShotSequence(); };
-state.seqExport      = () => { renderOffline({ sequence: true }); };
+state.seqExport      = () => { renderInDedicatedChrome({ sequence: true }).catch(() => {}); };
+state.seqExportFrames = () => { renderOffline({ sequence: true, framesOnly: true }); };
+state.renderSelfTest = () => { runRenderSelfTest().catch(() => {}); };
 
 // ---------------------------------------------------------------------------
 // Render Queue — batch multiple render jobs for unattended overnight rendering.
@@ -3440,7 +3884,7 @@ async function runRenderQueue() {
       // slower machines and is imperceptible in an overnight queue.
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       await new Promise(r => setTimeout(r, 80));
-      await renderOffline({ sequence: true });
+      await renderInDedicatedChrome({ sequence: true });
       job.status = 'done';
     } catch (err) {
       job.status = 'error';
@@ -3520,7 +3964,7 @@ function rebuildQueueGUI() {
 let fSeq = null;
 // References to the toggle-style action buttons so we can flip their visual
 // state (label + colour) when the underlying mode toggles on/off.
-let ecoBtnCtrl = null, pauseBtnCtrl = null, recordBtnCtrl = null, seqPlayBtnCtrl = null;
+let ecoBtnCtrl = null, pauseBtnCtrl = null, recordBtnCtrl = null, seqPlayBtnCtrl = null, presentationBtnCtrl = null;
 function setBtnActive(ctrl, active, opts = {}) {
   if (!ctrl || !ctrl.domElement) return;
   const labelOn  = opts.labelOn,  labelOff = opts.labelOff;
@@ -3770,18 +4214,18 @@ normalizeState();
   // Eco button (top-left) overrides this temporarily; this is the base level
   // the eco button restores to when toggled off.
   const fLive = fScene.addFolder('Live View').close();
-  fLive.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('quality (live only)').onChange(applyRenderQuality);
+  fLive.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('quality (live only)').onChange(setLiveQuality);
 
   // Look Grade — colour grade + finishing on the final composited image.
   // Applies to live view AND offline renders so the export carries your grade.
   const fLook = fScene.addFolder('Look Grade').close();
-  fLook.add(state, 'lookSaturation', 0.0, 2.0, 0.01).name('saturation').onChange(v => { lookPass.uniforms.uSaturation.value = v; });
-  fLook.add(state, 'lookContrast',   0.5, 2.0, 0.01).name('contrast').onChange(v => { lookPass.uniforms.uContrast.value = v; });
-  fLook.add(state, 'lookSharpen',    0.0, 1.0, 0.005).name('sharpen').onChange(v => { lookPass.uniforms.uSharpen.value = v; });
-  fLook.add(state, 'lookVignette',   0.0, 1.0, 0.01).name('vignette').onChange(v => { lookPass.uniforms.uVignette.value = v; });
-  fLook.add(state, 'lookGrain',      0.0, 1.0, 0.01).name('film grain').onChange(v => { lookPass.uniforms.uGrain.value = v; });
+  fLook.add(state, 'lookSaturation', 0.0, 2.0, 0.01).name('saturation').onChange(syncLook);
+  fLook.add(state, 'lookContrast',   0.5, 2.0, 0.01).name('contrast').onChange(syncLook);
+  fLook.add(state, 'lookSharpen',    0.0, 1.0, 0.005).name('sharpen').onChange(syncLook);
+  fLook.add(state, 'lookVignette',   0.0, 1.0, 0.01).name('vignette').onChange(syncLook);
+  fLook.add(state, 'lookGrain',      0.0, 1.0, 0.01).name('film grain').onChange(syncLook);
   fLook.add(state, 'loadLut').name('load LUT (.cube)…');
-  fLook.add(state, 'lookLutMix', 0.0, 1.0, 0.01).name('LUT strength').onChange(v => { lookPass.uniforms.uLutMix.value = v; });
+  fLook.add(state, 'lookLutMix', 0.0, 1.0, 0.01).name('LUT strength').onChange(syncLook);
   fLook.add(state, 'clearLut').name('clear LUT');
   fLook.add(state, 'lookLutName').name('current LUT').listen().disable();
 
@@ -3792,6 +4236,8 @@ normalizeState();
   // Eco render — sits right above the export button so it's in your face when
   // you're about to render. Throttles the export so the laptop stays usable.
   fSeq.add(state, 'seqExport').name('🎬 export sequence as video');
+  fSeq.add(state, 'backgroundRenderStatus').name('render status').listen().disable();
+  fSeq.add(state, 'seqExportFrames').name('🖼 export PNG sequence (no codec)');
   fSeq.add(state, 'seqEasing', Object.keys(EASINGS)).name('easing curve');
   fSeq.add(state, 'seqDefaultTransition', 0.1, 30, 0.1).name('default transition (s)');
   fSeq.add(state, 'seqDefaultHold', 0, 5, 0.1).name('default hold (s)');
@@ -3824,13 +4270,22 @@ normalizeState();
     if (typeof rebuildSequenceGUI === 'function') rebuildSequenceGUI();
   });
   fCap.add(state, 'renderSmooth', ['off (fast)', '2× (clean)', '3× (pristine)', '4× (gallery)']).name('smoothing (SSAA)');
-  // Both of these are experimental quality boosts — opt-in so an unstable render
-  // doesn't silently affect your normal exports. Trial them on a short test clip first.
-  fCap.add(state, 'motionBlurSamples', { 'off (sharp)': 1, '4× (cinematic)': 4, '8× (silky)': 8 }).name('motion blur (test)').onChange(v => { state.motionBlurSamples = +v | 0; });
+  fCap.add(state, 'exportStability', ['normal (faster)', 'extra clean (anti-glitch)']).name('export stability');
+
+  const fOutput = fCap.addFolder('Output Folder').close();
+  fOutput.add(state, 'selectRenderFolder').name('choose folder');
+  fOutput.add(state, 'renderFolderLabel').name('current folder').listen().disable();
+  fOutput.add(state, 'clearRenderFolder').name('reset to Downloads');
+
+  const fCapAdvanced = fCap.addFolder('Advanced Render Tests').close();
+  fCapAdvanced.add(state, 'renderSelfTest').name('run render self-test');
+  // Experimental quality boosts stay tucked away so the normal render path is
+  // easy to read. Trial these on a short test clip first.
+  fCapAdvanced.add(state, 'motionBlurSamples', { 'off (sharp)': 1, '4× (cinematic)': 4, '8× (silky)': 8 }).name('motion blur').onChange(v => { state.motionBlurSamples = +v | 0; });
   // (Eco render dropdown moved into the Shot Sequence folder — it sits right
   // next to the "export sequence as video" button so the choice is in front of
   // you when you actually click render.)
-  fCap.add(state, 'superDispersion').name('supersample dispersion (test)');
+  fCapAdvanced.add(state, 'superDispersion').name('supersample dispersion');
   // Note: video export now happens via the Shot Sequence "🎬 export sequence as video"
   // button. The standalone offline render / stop / live record / watermark controls
   // were removed at Kit's request — sequences cover all his rendering needs.
@@ -3850,8 +4305,9 @@ normalizeState();
       if (!name || name === '—') return;
       const p = loadPresets()[name];
       if (p) { applyPreset(p); state.currentPreset = name; guiRefresh(); setStatus(`loaded "${name}"`); }
-    });
+  });
   fP.add(state, 'savePreset').name('save as…');
+  fP.add(state, 'updatePreset').name('update current');
   fP.add(state, 'deletePreset').name('delete current');
   fP.add(state, 'exportPresets').name('export JSON');
   fP.add(state, 'importPresets').name('import JSON');
@@ -3863,19 +4319,10 @@ normalizeState();
   // Use the Presets folder above to save/load custom configurations instead.
 
   const f3 = gui2.addFolder('Actions');
-  // Eco + shape view toggles (previously floating buttons in the top-left).
-  // Click checkbox to flip; the existing toggleEcoMode / applyShapeView funcs
-  // do all the heavy lifting (quality drop, panel hide, material swap, etc.).
-  f3.add(state, 'ecoModeFlag').name('⚡ eco mode (E)').listen().onChange(v => {
-    // Keep flipping toggleEcoMode until the underlying state matches what the
-    // user just clicked. Belt-and-braces in case ecoModeActive and the GUI
-    // flag drift apart for any reason (defensive — safe even if they don't).
-    let guard = 0;
-    while (!!v !== !!ecoModeActive && guard < 2) {
-      toggleEcoMode();
-      guard++;
-    }
-  });
+  // Live preview quality affects only the on-screen viewport. Export/render
+  // quality and STEP output stay independent.
+  f3.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('live quality').onChange(setLiveQuality);
+  presentationBtnCtrl = f3.add(state, 'togglePresentationMode').name('⚡ presentation mode (M)');
   f3.add(state, 'shapeView').name('🗺 shape view').onChange(v => applyShapeView(!!v));
   state.toggleLensHidden = () => applyLensHidden(!state.lensHidden);
   lensHideBtnCtrl = f3.add(state, 'toggleLensHidden').name('👁 hide lens');
@@ -3883,6 +4330,7 @@ normalizeState();
   f3.add(state, 'reset').name('reset');
   f3.add(state, 'showDimensions').name('show dimensions overlay').onChange(updateDimensionOverlay);
   f3.add(state, 'exportSTL').name('export STL (A)');
+  f3.add(state, 'exportSTEP').name('export clean STEP for fabricator');
   f3.add(state, 'exportSpec').name('📄 export fabrication spec');
   f3.add(state, 'screenshot').name('save screenshot (viewport)');
   f3.add(state, 'hiResScreenshot').name('📸 hi-res PNG (4×)');
@@ -3902,6 +4350,7 @@ syncScene();
 syncBloom();
 syncLook();
 applyRenderQuality(state.renderQuality);
+syncPresentationBtn();
 
 // Startup: prefer user-saved defaults, then fall back to preset "1", then built-ins.
 (function autoLoadDefaults() {
@@ -4116,6 +4565,7 @@ let recStartMs = 0;
 const recCanvas = document.createElement('canvas');
 const recCtx = recCanvas.getContext('2d');
 let recUsesOffscreen = false;
+let renderDirectoryHandle = null;
 
 function pickMime() {
   const candidates = [
@@ -4132,17 +4582,15 @@ function drawRecFrame() {
   const src = renderer.domElement;
   const sw = src.width, sh = src.height;
   const dw = recCanvas.width, dh = recCanvas.height;
-  if (!sw || !sh) return;
+  if (!sw || !sh || !dw || !dh) return;
   const sAR = sw / sh, dAR = dw / dh;
   let cx, cy, cw, ch;
   if (sAR > dAR) {
-    // source wider than target → crop sides
     ch = sh;
     cw = sh * dAR;
     cx = (sw - cw) / 2;
     cy = 0;
   } else {
-    // source taller → crop top/bottom
     cw = sw;
     ch = sw / dAR;
     cx = 0;
@@ -4168,26 +4616,314 @@ function drawWatermark(ctx, w, h) {
   ctx.restore();
 }
 
+function supportsRenderFolderPicker() {
+  return typeof window.showDirectoryPicker === 'function' && window.isSecureContext;
+}
+
+async function selectRenderFolder() {
+  if (!supportsRenderFolderPicker()) {
+    state.renderFolderLabel = 'Downloads';
+    guiRefresh();
+    setStatus('folder picker needs Chrome via http://127.0.0.1:8899 — using Downloads');
+    return;
+  }
+  try {
+    renderDirectoryHandle = await window.showDirectoryPicker({
+      id: 'prismatica-render-folder',
+      mode: 'readwrite',
+      startIn: 'downloads',
+    });
+    state.renderFolderLabel = renderDirectoryHandle.name || 'selected folder';
+    guiRefresh();
+    setStatus(`render folder set: ${state.renderFolderLabel}`);
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      setStatus('render folder unchanged');
+      return;
+    }
+    console.error(e);
+    setStatus(`render folder failed — ${e.message || 'using Downloads'}`);
+  }
+}
+
+function clearRenderFolder() {
+  renderDirectoryHandle = null;
+  state.renderFolderLabel = 'Downloads';
+  guiRefresh();
+  setStatus('render folder cleared — using Downloads');
+}
+
+async function saveRenderBlob(blob, filename) {
+  if (renderDirectoryHandle) {
+    try {
+      let permission = await renderDirectoryHandle.queryPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') {
+        permission = await renderDirectoryHandle.requestPermission({ mode: 'readwrite' });
+      }
+      if (permission === 'granted') {
+        const fileHandle = await renderDirectoryHandle.getFileHandle(filename, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return { direct: true, label: state.renderFolderLabel || renderDirectoryHandle.name || 'selected folder' };
+      }
+    } catch (e) {
+      console.warn('[render folder] direct save failed, falling back to download', e);
+      setStatus(`render folder unavailable — downloading ${filename}`);
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return { direct: false, label: 'Downloads' };
+}
+
+async function renderInDedicatedChrome(opts = {}) {
+  const renderOpts = { ...opts };
+  if (location.protocol !== 'http:' || !/^127\.0\.0\.1:8899$|^localhost:8899$/.test(location.host)) {
+    state.backgroundRenderStatus = 'not rendering — open local app';
+    guiRefresh();
+    setStatus('not rendering — background sequence export needs the local app at http://127.0.0.1:8899/');
+    return;
+  }
+  if (renderOpts.sequence && shotSequence.length < 1) {
+    state.backgroundRenderStatus = 'add at least 1 saved shot first';
+    guiRefresh();
+    setStatus('add at least 1 saved shot first — use "save shot (current view)"');
+    return;
+  }
+
+  const label = renderOpts.framesOnly ? 'PNG sequence' : 'video';
+  const shouldAnalyze = !renderOpts.framesOnly;
+  liveSettleFrames = 0;
+  applyStableLiveLensMaterial(false);
+  if (!animPaused) {
+    setAnimPaused(true);
+  }
+  state.backgroundRenderStatus = `starting ${label} render…`;
+  guiRefresh();
+  setStatus(`visualizer paused · starting dedicated Chrome ${label} render… you can change tabs now`);
+  try {
+    const resp = await fetch('/api/render-background', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        state: renderStateSnapshot(),
+        sequence: JSON.parse(JSON.stringify(shotSequence)),
+        opts: renderOpts,
+        analyze: shouldAnalyze,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      throw new Error(data.error || `server returned ${resp.status}`);
+    }
+    if (data.jobId && data.state !== 'done') {
+      const finished = await waitForBackgroundRenderJob(data.jobId, label);
+      return finished;
+    }
+    applyRenderAnalysisStatus(data, label);
+    return data;
+  } catch (e) {
+    console.error('[dedicated render] failed', e);
+    state.backgroundRenderStatus = `failed: ${e.message}`;
+    guiRefresh();
+    setStatus(`dedicated render failed — ${e.message}`);
+    throw e;
+  }
+}
+
+function renderAnalysisSummary(analysis) {
+  if (!analysis || !analysis.ok) return null;
+  if (analysis.passed) return `passed · ${analysis.frames || 0} frames scanned`;
+  const parts = [];
+  if (analysis.spikes?.length) parts.push(`${analysis.spikes.length} spike${analysis.spikes.length === 1 ? '' : 's'}`);
+  if (analysis.tileSpikes?.length) parts.push(`${analysis.tileSpikes.length} block glitch${analysis.tileSpikes.length === 1 ? '' : 'es'}`);
+  if (analysis.holds?.length) parts.push(`${analysis.holds.length} hold${analysis.holds.length === 1 ? '' : 's'}`);
+  if (analysis.washedOut) parts.push('washed out');
+  return `possible glitch · ${parts.join(' + ') || 'frame issue'} detected`;
+}
+
+function applyRenderAnalysisStatus(data, label = 'video') {
+  const fileName = (data.path || data.filename || '').split('/').pop() || data.filename || 'render file';
+  const summary = renderAnalysisSummary(data.analysis);
+  if (summary) {
+    state.backgroundRenderStatus = `${label}: ${summary}`;
+    setStatus(`dedicated Chrome render saved: ${fileName} · scan ${summary} · ${data.path || 'Downloads'}`);
+    if (data.analysis && !data.analysis.passed) console.warn('[render scan possible glitch]', data.analysis);
+  } else {
+    state.backgroundRenderStatus = `saved: ${fileName}`;
+    setStatus(`dedicated Chrome render saved: ${fileName} · ${data.path || 'Downloads'}`);
+  }
+  guiRefresh();
+}
+
+async function runRenderSelfTest() {
+  if (location.protocol !== 'http:' || !/^127\.0\.0\.1:8899$|^localhost:8899$/.test(location.host)) {
+    state.backgroundRenderStatus = 'self-test needs local app';
+    guiRefresh();
+    setStatus('render self-test needs the local app at http://127.0.0.1:8899/');
+    return;
+  }
+  if (!animPaused) setAnimPaused(true);
+
+  const snap = renderStateSnapshot();
+  // Stress the current Prismatica look, not a simplified diagnostic scene.
+  // This mirrors the settings that exposed the export glitch: square 1080p,
+  // 30fps, 2x SSAA, and a camera move through the refractive lens.
+  Object.assign(snap, {
+    recFps: 30,
+    recResolution: '1080p (Full HD)',
+    recAspect: '1:1 square',
+    renderSmooth: '2× (clean)',
+    motionBlurSamples: 1,
+    seqEasing: 'linear',
+    recLoop: false,
+  });
+  const startPose = currentPose();
+  const dx = startPose.px - startPose.tx;
+  const dz = startPose.pz - startPose.tz;
+  const angle = Math.PI / 8;
+  const ca = Math.cos(angle);
+  const sa = Math.sin(angle);
+  const endPose = {
+    px: startPose.tx + dx * ca - dz * sa,
+    py: startPose.py + 80,
+    pz: startPose.tz + dx * sa + dz * ca,
+    tx: startPose.tx,
+    ty: startPose.ty,
+    tz: startPose.tz,
+    zoom: Math.max(0.25, (startPose.zoom || 1) * 1.12),
+  };
+  const testSequence = [
+    { pose: startPose, transitionSec: 0, holdSec: 0.5 },
+    { pose: endPose, transitionSec: 10, holdSec: 0.5 },
+  ];
+
+  state.backgroundRenderStatus = 'self-test: starting 1080p scan…';
+  guiRefresh();
+  setStatus('render self-test starting — 1080p square · 30fps · SSAA 2× · scanning for glitches and white-out…');
+  try {
+    const resp = await fetch('/api/render-background', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        state: snap,
+        sequence: testSequence,
+        opts: { sequence: true },
+        analyze: true,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) throw new Error(data.error || `server returned ${resp.status}`);
+    const finished = data.jobId && data.state !== 'done'
+      ? await waitForBackgroundRenderJob(data.jobId, 'self-test')
+      : data;
+    const analysis = finished.analysis;
+    if (!analysis || !analysis.ok) {
+      throw new Error(analysis?.error || 'render completed but frame analysis was unavailable');
+    }
+    const fileName = (finished.path || finished.filename || '').split('/').pop() || 'test render';
+    if (analysis.passed) {
+      state.backgroundRenderStatus = `self-test clean: ${analysis.frames} frames`;
+      setStatus(`render self-test clean — no spikes, holds, or white-out · ${analysis.frames} frames · ${fileName}`);
+    } else {
+      const parts = [];
+      if (analysis.spikes?.length) parts.push(`${analysis.spikes.length} spike${analysis.spikes.length === 1 ? '' : 's'}`);
+      if (analysis.tileSpikes?.length) parts.push(`${analysis.tileSpikes.length} block glitch${analysis.tileSpikes.length === 1 ? '' : 'es'}`);
+      if (analysis.holds?.length) parts.push(`${analysis.holds.length} hold${analysis.holds.length === 1 ? '' : 's'}`);
+      if (analysis.washedOut) parts.push('washed out');
+      state.backgroundRenderStatus = `self-test failed: ${parts.join(' + ') || 'frame issue'}`;
+      setStatus(`render self-test failed — ${parts.join(' + ') || 'frame issue'} detected · ${fileName}`);
+      console.warn('[render self-test failed]', analysis);
+    }
+    guiRefresh();
+    return finished;
+  } catch (e) {
+    console.error('[render self-test] failed', e);
+    state.backgroundRenderStatus = `self-test failed: ${e.message}`;
+    guiRefresh();
+    setStatus(`render self-test failed — ${e.message}`);
+    throw e;
+  }
+}
+
+async function waitForBackgroundRenderJob(jobId, label) {
+  let lastStatus = '';
+  let fetchFailures = 0;
+  while (true) {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    let resp;
+    try {
+      resp = await fetch(`/api/render-status?id=${encodeURIComponent(jobId)}`);
+    } catch (e) {
+      fetchFailures++;
+      if (fetchFailures <= 3) {
+        state.backgroundRenderStatus = `${label}: reconnecting…`;
+        setStatus(`dedicated Chrome ${label} render — reconnecting to local server (${fetchFailures}/3)…`);
+        guiRefresh();
+        continue;
+      }
+      throw new Error('local render server is not reachable; restart the local app and render again');
+    }
+    fetchFailures = 0;
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      throw new Error(data.error || `render status unavailable (${resp.status})`);
+    }
+
+    const pct = Number.isFinite(data.progress) ? Math.max(0, Math.min(100, Math.round(data.progress * 100))) : null;
+    const status = data.status || data.state || 'rendering…';
+    if (pct != null) {
+      state.backgroundRenderStatus = `${label}: ${pct}%`;
+      setStatus(`dedicated Chrome ${label} render ${pct}% — ${status}`);
+    } else {
+      state.backgroundRenderStatus = status;
+      setStatus(`dedicated Chrome ${label} render — ${status}`);
+    }
+    if (status !== lastStatus) {
+      lastStatus = status;
+      console.log('[dedicated render]', status);
+    }
+    guiRefresh();
+
+    if (data.state === 'done') {
+      applyRenderAnalysisStatus(data, label);
+      return data;
+    }
+    if (data.state === 'error') {
+      throw new Error(data.error || 'render failed');
+    }
+  }
+}
+
 function startRecording() {
   if (mediaRecorder && mediaRecorder.state === 'recording') return;
   const dims = getRecDims();
-  let streamSource;
+  const nativeW = renderer.domElement.width & ~1;
+  const nativeH = renderer.domElement.height & ~1;
   if (dims) {
     recCanvas.width = dims[0];
     recCanvas.height = dims[1];
-    recCtx.fillStyle = '#000';
-    recCtx.fillRect(0, 0, dims[0], dims[1]);
-    recUsesOffscreen = true;
-    streamSource = recCanvas;
   } else {
-    recUsesOffscreen = false;
-    streamSource = renderer.domElement;
+    recCanvas.width = nativeW;
+    recCanvas.height = nativeH;
   }
+  recCtx.fillStyle = '#000';
+  recCtx.fillRect(0, 0, recCanvas.width, recCanvas.height);
+  recUsesOffscreen = true;
+  const streamSource = recCanvas;
   const fps = Math.max(12, Math.min(60, state.recFps | 0 || 30));
   const stream = streamSource.captureStream(fps);
   const mimeType = pickMime();
   try {
-    mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 16_000_000 });
+    mediaRecorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 80_000_000 });
   } catch (e) {
     try { mediaRecorder = new MediaRecorder(stream); }
     catch (err) { setStatus('recording not supported in this browser'); recUsesOffscreen = false; return; }
@@ -4286,7 +5022,8 @@ function applyShapeView(on) {
     lookPass.uniforms.uVignette.value   = on ? 0.0 : (state.lookVignette   ?? 0.0);
     lookPass.uniforms.uGrain.value      = on ? 0.0 : (state.lookGrain      ?? 0.0);
     lookPass.uniforms.uSharpen.value    = on ? 0.0 : (state.lookSharpen    ?? 0.0);
-    lookPass.uniforms.uLutSize.value    = on ? 0   : lookPass.uniforms.uLutSize.value;
+    lookPass.enabled = on ? false : lookPass.enabled;
+    if (!on) syncLook();
   }
 }
 
@@ -4311,6 +5048,67 @@ function applyLensHidden(hidden) {
     guiRefresh();
   }
   setStatus(hidden ? 'lens hidden — LED panel visible only' : 'lens restored');
+}
+
+let presentationSnapshot = null;
+function syncPresentationBtn() {
+  setBtnActive(presentationBtnCtrl, !!state.presentationMode, {
+    labelOn: '✓ presentation mode (M)',
+    labelOff: '⚡ presentation mode (M)',
+  });
+}
+function applyLivePanelSmooth(enabled) {
+  state.panelSmooth = !!enabled;
+  ledMat.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
+  ledMatB.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
+}
+function togglePresentationMode(force) {
+  const turnOn = force === undefined ? !state.presentationMode : !!force;
+  if (turnOn && !state.presentationMode) {
+    presentationSnapshot = {
+      renderQuality: state.renderQuality,
+      bloomEnabled: state.bloomEnabled,
+      panelSmooth: state.panelSmooth,
+      lookGrain: state.lookGrain,
+      lookSharpen: state.lookSharpen,
+      showDimensions: state.showDimensions,
+    };
+    state.presentationMode = true;
+    state.renderQuality = 'eco';
+    applyRenderQuality('eco');
+    state.bloomEnabled = false;
+    syncBloom();
+    applyLivePanelSmooth(false);
+    state.lookGrain = 0;
+    state.lookSharpen = 0;
+    syncLook();
+    state.showDimensions = false;
+    updateDimensionOverlay();
+    liveSettleFrames = 0;
+    syncPresentationBtn();
+    guiRefresh();
+    setStatus('presentation mode ON · fast live quality · bloom off · exports unchanged');
+    return;
+  }
+  if (!turnOn && state.presentationMode) {
+    if (presentationSnapshot) {
+      state.renderQuality = presentationSnapshot.renderQuality;
+      applyRenderQuality(state.renderQuality);
+      state.bloomEnabled = presentationSnapshot.bloomEnabled;
+      syncBloom();
+      applyLivePanelSmooth(presentationSnapshot.panelSmooth);
+      state.lookGrain = presentationSnapshot.lookGrain;
+      state.lookSharpen = presentationSnapshot.lookSharpen;
+      syncLook();
+      state.showDimensions = presentationSnapshot.showDimensions;
+      updateDimensionOverlay();
+    }
+    state.presentationMode = false;
+    presentationSnapshot = null;
+    syncPresentationBtn();
+    guiRefresh();
+    setStatus('presentation mode OFF · live settings restored');
+  }
 }
 
 function toggleEcoMode() {
@@ -4444,7 +5242,8 @@ function hideRenderOverlay() {
 }
 async function renderOffline(opts = {}) {
   if (offlineInProgress) return;
-  if (typeof VideoEncoder === 'undefined') { setStatus('WebCodecs not supported in this browser'); return; }
+  const framesOnly = !!opts.framesOnly;
+  if (!framesOnly && typeof VideoEncoder === 'undefined') { setStatus('WebCodecs not supported in this browser'); return; }
 
   // Sequence mode: drive the camera from the shot sequence instead of auto-motion.
   // Total duration comes from the sequence itself, overriding state.recDuration.
@@ -4460,10 +5259,6 @@ async function renderOffline(opts = {}) {
     : Math.max(1, Math.min(120, state.recDuration | 0 || 10));
   const totalFrames = Math.max(1, Math.round(fps * duration));
 
-  // Exports always run at max quality — full transmission resolution + panel smoothing.
-  // The toggle was removed; this is permanently on.
-  const maxQ = true;
-
   const dims = getRecDims();
   let W, H, useOffscreen;
   if (dims) { W = dims[0]; H = dims[1]; useOffscreen = true; }
@@ -4474,9 +5269,15 @@ async function renderOffline(opts = {}) {
   W = W & ~1; H = H & ~1;
 
   // Supersample factor — render at ssaa×output then downscale for clean edges.
-  // SSAA is fully user-controlled via the smoothing dropdown.
+  // SSAA is user-controlled via the smoothing dropdown, with a safety cap for
+  // huge outputs. 4K portrait/reels + 2x/3x/4x can allocate 30-130MP render
+  // targets and make Chrome kill the dedicated render tab before it can save.
   const ssaaMap = { 'off (fast)': 1, '2× (clean)': 2, '3× (pristine)': 3, '4× (gallery)': 4 };
-  const ssaa = ssaaMap[state.renderSmooth] || 1;
+  const requestedSsaa = ssaaMap[state.renderSmooth] || 1;
+  const MAX_EXPORT_RENDER_PIXELS = 14_000_000;
+  const safeSsaa = Math.max(1, Math.floor(Math.sqrt(MAX_EXPORT_RENDER_PIXELS / Math.max(1, W * H))));
+  const ssaa = Math.min(requestedSsaa, safeSsaa);
+  const ssaaSafetyNote = ssaa < requestedSsaa ? ` · SSAA safety ${requestedSsaa}×→${ssaa}×` : '';
   const renderW = (W * ssaa) & ~1;
   const renderH = (H * ssaa) & ~1;
 
@@ -4484,11 +5285,31 @@ async function renderOffline(opts = {}) {
   // times and average them. Big quality win on sequence exports with camera
   // moves: the silky smear of the transition reads as proper cinematic motion
   // blur rather than a jerk between discrete steps. 1 = off (default).
-  const mbSamples = Math.max(1, state.motionBlurSamples | 0);
+  const requestedMbSamples = Math.max(1, state.motionBlurSamples | 0);
+  const extraCleanExport = state.exportStability !== 'normal (faster)';
+  // Sequence exports move the camera across a dense LED grid seen through a
+  // refractive lens. Even when the user leaves visible "motion blur" off, take
+  // a tiny temporal average for MP4 output so the moving moire pattern does not
+  // collapse into diagonal scan-line flashes.
+  const exportMinTemporalSamples = (
+    extraCleanExport && !framesOnly && useSequence && state.renderSmooth !== 'off (fast)'
+  ) ? 2 : 1;
+  const mbSamples = Math.max(requestedMbSamples, exportMinTemporalSamples);
   const motionBlurOn = mbSamples > 1;
+  const tag = state.recAspect.replace(/\s+/g, '_').replace(/:/g, 'x');
+  const videoFilename = !framesOnly ? `prismatica_offline_${tag}_${W}x${H}_${fps}fps_${Date.now()}.mp4` : '';
 
-  let Muxer, ArrayBufferTarget;
-  {
+  let Muxer, ArrayBufferTarget, StreamTarget, zipSync, strToU8;
+  if (framesOnly) {
+    try {
+      const zipMod = await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js');
+      zipSync = zipMod.zipSync;
+      strToU8 = zipMod.strToU8;
+    } catch (e) {
+      setStatus('PNG sequence exporter failed to load zip library: ' + e.message);
+      return;
+    }
+  } else {
     const sources = [
       'https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/+esm',
       'https://esm.sh/mp4-muxer@5.2.2',
@@ -4499,17 +5320,20 @@ async function renderOffline(opts = {}) {
     for (const src of sources) {
       try {
         const mod = await import(src);
-        Muxer = mod.Muxer; ArrayBufferTarget = mod.ArrayBufferTarget;
-        if (Muxer && ArrayBufferTarget) { lastErr = null; break; }
-        lastErr = new Error('module missing Muxer / ArrayBufferTarget');
+        Muxer = mod.Muxer; ArrayBufferTarget = mod.ArrayBufferTarget; StreamTarget = mod.StreamTarget;
+        if (Muxer && ArrayBufferTarget && StreamTarget) { lastErr = null; break; }
+        lastErr = new Error('module missing Muxer / ArrayBufferTarget / StreamTarget');
       } catch (e) { lastErr = e; }
     }
-    if (!Muxer || !ArrayBufferTarget) {
+    if (!Muxer || !ArrayBufferTarget || !StreamTarget) {
       setStatus('mp4-muxer failed to load: ' + (lastErr ? lastErr.message : 'unknown'));
       return;
     }
   }
 
+  let codec = '';
+  let targetBitrate = 0;
+  if (!framesOnly) {
   // Pick an AVC profile that supports the target resolution.
   // Max coded area (macroblocks) per H.264 level:
   //   4.0 → 8,192   (1920×1088)
@@ -4529,39 +5353,89 @@ async function renderOffline(opts = {}) {
   };
   // Walk up from the suggested codec until we find one the browser will accept.
   const AVC_LADDER = ['avc1.640028','avc1.640032','avc1.640034','avc1.64003E'];
-  let codec = pickAvcLevel(W, H);
+  codec = pickAvcLevel(W, H);
   const startIdx = AVC_LADDER.indexOf(codec);
-  // Bitrate scales with pixels × fps. Target ~0.12 bits/pixel/frame — high quality without being wasteful.
-  // Clamp to [12 Mbps, 120 Mbps] so small renders aren't starved and 8K doesn't blow out.
-  const targetBitrate = Math.round(Math.max(12_000_000, Math.min(120_000_000, W * H * fps * 0.12)));
+  // Bitrate scales with pixels × fps. Prismatica's refracted LED patterns are
+  // unusually hostile to H.264: thin RGB lines pass through glass/refraction,
+  // then motion and chroma subsampling can turn underfed P-frames into small
+  // blocky colour bursts. Favour quality heavily over small files.
+  targetBitrate = Math.round(Math.max(160_000_000, Math.min(360_000_000, W * H * fps * 3.0)));
   for (let i = Math.max(0, startIdx); i < AVC_LADDER.length; i++) {
     try {
       const sup = await VideoEncoder.isConfigSupported({ codec: AVC_LADDER[i], width: W, height: H, bitrate: targetBitrate, framerate: fps });
       if (sup && sup.supported) { codec = AVC_LADDER[i]; break; }
     } catch (_) { /* try next */ }
   }
-
-  const muxer = new Muxer({
-    target: new ArrayBufferTarget(),
-    video: { codec: 'avc', width: W, height: H, frameRate: fps },
-    fastStart: 'in-memory',
-  });
+  }
 
   let encodeError = null;
-  const encoder = new VideoEncoder({
-    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-    error: (e) => { encodeError = e; console.error(e); },
-  });
-  try {
-    encoder.configure({
-      codec,
-      width: W,
-      height: H,
-      bitrate: targetBitrate,
-      framerate: fps,
-      latencyMode: 'quality',
+  let muxer = null;
+  let encoder = null;
+  let streamMp4 = null;
+  let streamMp4Path = '';
+  let streamMp4Bytes = 0;
+  let streamWritePromises = [];
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const step = 0x8000;
+    for (let i = 0; i < bytes.length; i += step) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+    }
+    return btoa(binary);
+  }
+  const pngFrames = framesOnly ? {} : null;
+  if (!framesOnly) {
+    const backgroundMp4 = window.__prismaticaBackgroundMp4;
+    const canStreamMp4 = backgroundMp4
+      && typeof backgroundMp4.start === 'function'
+      && typeof backgroundMp4.write === 'function'
+      && typeof backgroundMp4.finish === 'function';
+    let target;
+    let fastStart;
+    if (canStreamMp4) {
+      try {
+        const started = await backgroundMp4.start(videoFilename);
+        streamMp4 = backgroundMp4;
+        streamMp4Path = started?.path || '';
+        target = new StreamTarget({
+          chunked: true,
+          chunkSize: 4 * 1024 * 1024,
+          onData: (data, position) => {
+            const bytes = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+            streamWritePromises.push(streamMp4.write(arrayBufferToBase64(bytes), position));
+          },
+        });
+        fastStart = false;
+      } catch (e) {
+        setStatus('streaming MP4 setup failed: ' + (e.message || e));
+        return;
+      }
+    } else {
+      target = new ArrayBufferTarget();
+      fastStart = 'in-memory';
+    }
+    muxer = new Muxer({
+      target,
+      video: { codec: 'avc', width: W, height: H, frameRate: fps },
+      fastStart,
     });
-  } catch (e) { setStatus('encoder config failed: ' + e.message); return; }
+
+    encoder = new VideoEncoder({
+      output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+      error: (e) => { encodeError = e; console.error(e); },
+    });
+    try {
+      encoder.configure({
+        codec,
+        width: W,
+        height: H,
+        bitrate: targetBitrate,
+        framerate: fps,
+        latencyMode: 'quality',
+      });
+    } catch (e) { setStatus('encoder config failed: ' + e.message); return; }
+  }
 
   // Setup offscreen canvas for aspect crop + SSAA downscale.
   // ALWAYS route through recCanvas — even for native-ratio no-SSAA renders.
@@ -4582,8 +5456,8 @@ async function renderOffline(opts = {}) {
   offlineInProgress = true;
   // Auto-pause live animation while the render runs — keeps the browser snappy.
   if (!animPaused) { setAnimPaused(true); autoPausedForRender = true; }
-  // Hide canvas + GUI behind a static overlay during the render. Kills compositor
-  // work on a huge canvas (big win at 4K/8K) and gives the user a clean progress UI.
+  // Cover the canvas + hide GUI behind a static overlay during the render. The
+  // canvas itself stays in layout so Chrome keeps its backing surface valid.
   showRenderOverlay({ W, H, fps, totalFrames, mode: useSequence ? 'sequence' : 'normal' });
 
   // Supersample: resize renderer/composer to ssaa×output. Camera aspect matches
@@ -4596,20 +5470,45 @@ async function renderOffline(opts = {}) {
   const savedCamAspect = camera.aspect;
   const savedTransmissionScale = renderer.transmissionResolutionScale;
   const savedPanelSmooth = ledMat.uniforms.uPanelSmooth.value;
-  // Max-quality override forces the heaviest transmission RT for glass realism,
-  // and always enables panel anti-aliasing (kills scan-line moiré on exports).
-  if (maxQ) {
-    renderer.transmissionResolutionScale = 1.0;
-    ledMat.uniforms.uPanelSmooth.value = 1;
-    ledMatB.uniforms.uPanelSmooth.value = 1;
+  const savedPanelSmoothB = ledMatB.uniforms.uPanelSmooth.value;
+  const savedPanelScale = ledMat.uniforms.uScale.value;
+  const savedPanelScaleB = ledMatB.uniforms.uScale.value;
+  const savedPatSharp = ledMat.uniforms.uPatSharp.value;
+  const savedPatSharpB = ledMatB.uniforms.uPatSharp.value;
+  const savedPanelContrast = ledMat.uniforms.uPanelContrast.value;
+  const savedPanelContrastB = ledMatB.uniforms.uPanelContrast.value;
+  const savedPanelSpeed = ledMat.uniforms.uSpeed.value;
+  const savedPanelSpeedB = ledMatB.uniforms.uSpeed.value;
+  const savedPgFlow = ledMat.uniforms.uPgFlow.value;
+  const savedPgFlowB = ledMatB.uniforms.uPgFlow.value;
+  const savedSqGradFlow = ledMat.uniforms.uSqGradFlow.value;
+  const savedSqGradFlowB = ledMatB.uniforms.uSqGradFlow.value;
+  const savedLensMaterialA = lensMesh ? lensMesh.material : null;
+  const savedLensMaterialB = lensMeshB ? lensMeshB.material : null;
+  function restoreLensExportMaterials() {
+    if (lensMesh && savedLensMaterialA) lensMesh.material = savedLensMaterialA;
+    if (lensMeshB && savedLensMaterialB) lensMeshB.material = savedLensMaterialB;
   }
-  // Eco render: drop the transmission RT resolution to lighten the most
-  // expensive pass. Halves transmission cost vs default 1.0.
-  // Supersample dispersion is OPT-IN ONLY. It supersamples the transmission RT
-  // to 2× viewport for sharper rainbow fringes — can cause glitches on some setups.
-  if (state.superDispersion) {
-    renderer.transmissionResolutionScale = 2.0;
-  }
+  // Always render the real refractive glass material during export. The live
+  // viewport may temporarily switch to a stable preview material while Kit
+  // moves the camera, but the exported MP4 must keep the full Prismatica look.
+  if (lensMesh) lensMesh.material = lensMaterial;
+  if (lensMeshB) lensMeshB.material = lensMaterialB;
+  // Keep the real refractive glass/reflection look, but do not force the
+  // internal transmission target to 1.0. That full-res target is the unstable
+  // path that causes the coloured/checker flash in exports. The output frame
+  // still renders at full requested resolution/SSAA; only the hidden refraction
+  // buffer is capped to the same stable range as live Ultra.
+  renderer.transmissionResolutionScale = STABLE_EXPORT_TRANSMISSION_SCALE;
+  // Export-only anti-moire: the refractive lens magnifies and bends the LED
+  // pixel grid, so camera motion can turn razor-sharp panel cells into diagonal
+  // scan lines. Keep the real lens/reflections, but prefilter the panel during
+  // MP4 capture so the exported image behaves like a camera filming an LED wall.
+  const exportPanelSmooth = extraCleanExport
+    ? (state.renderSmooth === 'off (fast)' ? 2 : 3)
+    : (state.renderSmooth === 'off (fast)' ? (state.panelSmooth ? 1 : 0) : 2);
+  ledMat.uniforms.uPanelSmooth.value = exportPanelSmooth;
+  ledMatB.uniforms.uPanelSmooth.value = exportPanelSmooth;
   const outputAspect = W / H;
   if (useOffscreen) {
     renderer.setPixelRatio(1);
@@ -4690,7 +5589,7 @@ async function renderOffline(opts = {}) {
     ledMatB.uniforms.uTime.value = warmT;
     if (useSequence) { const p = evaluateSequenceAt(warmT); if (p) applyPose(p); }
     camera.updateMatrixWorld(true);
-    for (let w = 0; w < 4; w++) {
+    for (let w = 0; w < 8; w++) {
       renderFrame(warmT);
       await new Promise(r => setTimeout(r, 8));
     }
@@ -4700,31 +5599,202 @@ async function renderOffline(opts = {}) {
     _gl.readPixels(0, 0, 1, 1, _gl.RGBA, _gl.UNSIGNED_BYTE, _syncBuf);
   }
 
-  // Per-frame GPU sync helper — used below for non-native renders.
-  // readPixels stalls the CPU until all pending GPU commands (including the
-  // OutputPass draw to the canvas) have completed. Pre-allocate once so we're
-  // not creating a new Uint8Array every frame.
-  const _glCtx    = renderer.getContext();
-  const _glSyncBuf = new Uint8Array(4);
-
   const startMs = performance.now();
   offlineAbortRequested = false;
   setStatus(`rendering 0 / ${totalFrames}…`);
 
-  // --- Helper: draw one sub-frame from renderer.domElement onto recCanvas with
-  // a given accumulation alpha. Mirrors drawRecFrame's crop/scale logic but lets
-  // motion blur build up an averaged frame. -----------------------------------
+  // --- Helper: draw one rendered sub-frame onto recCanvas with a given
+  // accumulation alpha. This mirrors drawRecFrame's crop/scale logic for
+  // motion-blur accumulation without the delayed repair buffer.
   function accumulateSubFrame(alpha) {
     const src = renderer.domElement;
     const sw = src.width, sh = src.height;
     const dw = recCanvas.width, dh = recCanvas.height;
-    if (!sw || !sh) return;
+    if (!sw || !sh || !dw || !dh) return;
     const sAR = sw / sh, dAR = dw / dh;
     let cx, cy, cw, ch;
     if (sAR > dAR) { ch = sh; cw = sh * dAR; cx = (sw - cw) / 2; cy = 0; }
     else           { cw = sw; ch = sw / dAR; cx = 0; cy = (sh - ch) / 2; }
+    recCtx.globalCompositeOperation = 'lighter';
     recCtx.globalAlpha = alpha;
     recCtx.drawImage(src, cx, cy, cw, ch, 0, 0, dw, dh);
+  }
+
+  async function encodeOutputFrame(output) {
+    if (!output) return;
+    if (framesOnly) {
+      try {
+        const pngBlob = await new Promise((resolve, reject) => {
+          output.canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('PNG encode returned empty blob')), 'image/png');
+        });
+        const frameName = `frames/frame_${String(output.frameIndex + 1).padStart(5, '0')}.png`;
+        pngFrames[frameName] = new Uint8Array(await pngBlob.arrayBuffer());
+      } catch (e) {
+        encodeError = e;
+        console.error(e);
+      }
+      return;
+    }
+
+    let frame;
+    try {
+      frame = new VideoFrame(output.canvas, { timestamp: Math.round(output.timestamp * 1_000_000) });
+    } catch (e) {
+      setStatus('VideoFrame failed: ' + e.message);
+      encodeError = e;
+      return;
+    }
+    // Prismatica's refracted LED grid is hostile to inter-frame prediction:
+    // tiny RGB dots move behind glass and the H.264 encoder can produce brief
+    // rectangular macroblock glitches. All-intra costs more bytes but removes
+    // the P-frame dependency that caused those local block bursts.
+    const keyFrame = true;
+    try {
+      encoder.encode(frame, { keyFrame });
+    } catch (e) {
+      encodeError = e;
+      console.error(e);
+      try { frame.close(); } catch (_) {}
+      return;
+    }
+    frame.close();
+  }
+  const frameSyncGl = renderer.getContext();
+  const frameSyncPixel = new Uint8Array(4);
+  function syncRenderedFrame() {
+    frameSyncGl.readPixels(0, 0, 1, 1, frameSyncGl.RGBA, frameSyncGl.UNSIGNED_BYTE, frameSyncPixel);
+  }
+  function renderSettledFrame(t) {
+    // MeshPhysicalMaterial transmission uses an internal offscreen buffer. In
+    // heavy offline exports, the first render at a new camera/time can very
+    // rarely sample a stale/uninitialised transmission target, producing a
+    // checker or colour burst. Render the exact same timestamp several times
+    // and capture only the final settled pass.
+    for (let pass = 0; pass < 4; pass++) {
+      renderFrame(t);
+      syncRenderedFrame();
+    }
+  }
+
+  const outputGuardThumbCanvas = document.createElement('canvas');
+  outputGuardThumbCanvas.width = 160;
+  outputGuardThumbCanvas.height = 160;
+  const outputGuardThumbCtx = outputGuardThumbCanvas.getContext('2d', { willReadFrequently: true });
+  const outputGuardPrevCanvas = document.createElement('canvas');
+  const outputGuardPrevCtx = outputGuardPrevCanvas.getContext('2d');
+  const outputGuardPendingCanvas = document.createElement('canvas');
+  const outputGuardPendingCtx = outputGuardPendingCanvas.getContext('2d');
+  const outputGuardReadyCanvas = document.createElement('canvas');
+  const outputGuardReadyCtx = outputGuardReadyCanvas.getContext('2d');
+  for (const c of [outputGuardPrevCanvas, outputGuardPendingCanvas, outputGuardReadyCanvas]) {
+    c.width = W;
+    c.height = H;
+  }
+  let outputGuardPrev = null;
+  let outputGuardPending = null;
+  let outputGuardFixes = 0;
+  let outputGuardCarryRepairFrames = 0;
+  function outputGuardThumb(canvas) {
+    outputGuardThumbCtx.clearRect(0, 0, 160, 160);
+    outputGuardThumbCtx.drawImage(canvas, 0, 0, 160, 160);
+    return new Uint8ClampedArray(outputGuardThumbCtx.getImageData(0, 0, 160, 160).data);
+  }
+  function outputGuardDiff(a, b) {
+    if (!a || !b || a.length !== b.length) return 0;
+    let sum = 0;
+    for (let i = 0; i < a.length; i += 4) {
+      sum += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+    }
+    return sum / ((a.length / 4) * 3 * 255);
+  }
+  function outputGuardTileDiff(a, b) {
+    if (!a || !b || a.length !== b.length) return 0;
+    const size = 160;
+    const tile = 20;
+    let maxTile = 0;
+    for (let ty = 0; ty < size; ty += tile) {
+      for (let tx = 0; tx < size; tx += tile) {
+        let sum = 0;
+        let count = 0;
+        for (let y = ty; y < Math.min(size, ty + tile); y++) {
+          for (let x = tx; x < Math.min(size, tx + tile); x++) {
+            const i = (y * size + x) * 4;
+            sum += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+            count += 3;
+          }
+        }
+        if (count) maxTile = Math.max(maxTile, sum / (count * 255));
+      }
+    }
+    return maxTile;
+  }
+  function copyOutputGuardCanvas(src, ctx, dst) {
+    ctx.clearRect(0, 0, dst.width, dst.height);
+    ctx.drawImage(src, 0, 0);
+  }
+  function blendedOutputGuardFrame(prevCanvas, nextCanvas) {
+    outputGuardReadyCtx.clearRect(0, 0, W, H);
+    outputGuardReadyCtx.globalAlpha = 1;
+    outputGuardReadyCtx.drawImage(prevCanvas, 0, 0);
+    outputGuardReadyCtx.globalAlpha = 0.5;
+    outputGuardReadyCtx.drawImage(nextCanvas, 0, 0);
+    outputGuardReadyCtx.globalAlpha = 1;
+    return outputGuardReadyCanvas;
+  }
+  function queueGuardedFrame(canvas, frameIndex, timestamp) {
+    const thumb = outputGuardThumb(canvas);
+    if (!outputGuardPending) {
+      copyOutputGuardCanvas(canvas, outputGuardPendingCtx, outputGuardPendingCanvas);
+      outputGuardPending = { frameIndex, timestamp, thumb };
+      return null;
+    }
+
+    let readyCanvas = outputGuardReadyCanvas;
+    copyOutputGuardCanvas(outputGuardPendingCanvas, outputGuardReadyCtx, outputGuardReadyCanvas);
+    if (outputGuardPrev) {
+      const prevToPending = outputGuardDiff(outputGuardPrev.thumb, outputGuardPending.thumb);
+      const pendingToCurrent = outputGuardDiff(outputGuardPending.thumb, thumb);
+      const prevToCurrent = outputGuardDiff(outputGuardPrev.thumb, thumb);
+      const prevTilePending = outputGuardTileDiff(outputGuardPrev.thumb, outputGuardPending.thumb);
+      const pendingTileCurrent = outputGuardTileDiff(outputGuardPending.thumb, thumb);
+      const prevTileCurrent = outputGuardTileDiff(outputGuardPrev.thumb, thumb);
+      const globalOutlier =
+        prevToPending > Math.max(0.035, prevToCurrent * 2.2 + 0.012) &&
+        pendingToCurrent > Math.max(0.035, prevToCurrent * 2.2 + 0.012);
+      const tileOutlier =
+        prevTilePending > Math.max(0.13, prevTileCurrent * 2.5 + 0.035) &&
+        pendingTileCurrent > Math.max(0.13, prevTileCurrent * 2.5 + 0.035);
+      const outlier = globalOutlier || tileOutlier;
+      if (outlier) {
+        readyCanvas = blendedOutputGuardFrame(outputGuardPrevCanvas, canvas);
+        outputGuardFixes++;
+        outputGuardCarryRepairFrames = Math.max(outputGuardCarryRepairFrames, 4);
+        if (outputGuardFixes <= 8) {
+          console.warn(`[export outlier] interpolated frame ${outputGuardPending.frameIndex} (${prevToPending.toFixed(3)} / ${pendingToCurrent.toFixed(3)}, neighbours ${prevToCurrent.toFixed(3)}, tile ${prevTilePending.toFixed(3)} / ${pendingTileCurrent.toFixed(3)})`);
+        }
+      }
+    }
+
+    const ready = { canvas: readyCanvas, frameIndex: outputGuardPending.frameIndex, timestamp: outputGuardPending.timestamp };
+    copyOutputGuardCanvas(readyCanvas, outputGuardPrevCtx, outputGuardPrevCanvas);
+    outputGuardPrev = { thumb: outputGuardThumb(readyCanvas) };
+    let nextPendingThumb = thumb;
+    if (outputGuardCarryRepairFrames > 0) {
+      copyOutputGuardCanvas(readyCanvas, outputGuardPendingCtx, outputGuardPendingCanvas);
+      nextPendingThumb = outputGuardThumb(readyCanvas);
+      outputGuardCarryRepairFrames--;
+      outputGuardFixes++;
+    } else {
+      copyOutputGuardCanvas(canvas, outputGuardPendingCtx, outputGuardPendingCanvas);
+    }
+    outputGuardPending = { frameIndex, timestamp, thumb: nextPendingThumb };
+    return ready;
+  }
+  function flushGuardedFrame() {
+    if (!outputGuardPending) return null;
+    const ready = { canvas: outputGuardPendingCanvas, frameIndex: outputGuardPending.frameIndex, timestamp: outputGuardPending.timestamp };
+    outputGuardPending = null;
+    return ready;
   }
 
   for (let i = 0; i < totalFrames; i++) {
@@ -4753,9 +5823,10 @@ async function renderOffline(opts = {}) {
           updateCameraMotion(subDt);
         }
         camera.updateMatrixWorld(true);
-        renderFrame(subT);
+        renderSettledFrame(subT);
         accumulateSubFrame(alpha);
       }
+      recCtx.globalCompositeOperation = 'source-over';
       recCtx.globalAlpha = 1.0;
       drawWatermark(recCtx, recCanvas.width, recCanvas.height);
       src = recCanvas;
@@ -4769,34 +5840,11 @@ async function renderOffline(opts = {}) {
         updateCameraMotion(1 / fps);
       }
       camera.updateMatrixWorld(true);
-      renderFrame(t);
-      // recUsesOffscreen is always true (set in render setup above), so we
-      // always drawRecFrame → recCanvas → VideoFrame. For non-native renders
-      // (useOffscreen=true) where renderer.setSize() was called, Chrome
-      // allocates a new canvas IOSurface — drawImage can race the GPU command
-      // queue and read stale pixels on some frames (intermittent grey squares).
-      // Force a CPU stall via readPixels so the IOSurface is fully written before
-      // drawImage reads it. Native renders (useOffscreen=false) use the same
-      // long-lived canvas from live view; no sync needed there.
-      if (useOffscreen) {
-        _glCtx.readPixels(0, 0, 1, 1, _glCtx.RGBA, _glCtx.UNSIGNED_BYTE, _glSyncBuf);
-      }
+      renderSettledFrame(t);
       if (recUsesOffscreen) { drawRecFrame(); src = recCanvas; } else { src = renderer.domElement; }
     }
-
-    let frame;
-    try {
-      frame = new VideoFrame(src, { timestamp: Math.round(t * 1_000_000) });
-    } catch (e) { setStatus('VideoFrame failed: ' + e.message); break; }
-    const keyFrame = (i % fps) === 0;
-    try {
-      encoder.encode(frame, { keyFrame });
-    } catch (e) {
-      encodeError = e;
-      try { frame.close(); } catch (_) {}
-      break;
-    }
-    frame.close();
+    await encodeOutputFrame(queueGuardedFrame(src, i, t));
+    if (encodeError) break;
 
     // Backpressure: wait for the encoder queue to drain below a safe threshold
     // before queueing more frames. This prevents GPU/encoder buildup at heavy SSAA.
@@ -4804,7 +5852,7 @@ async function renderOffline(opts = {}) {
     // spin-check (no yield) in that case so background renders aren't penalised.
     const queueLimit = Math.max(4, Math.min(fps, 12));
     let waitGuard = 0;
-    while (encoder.encodeQueueSize > queueLimit && encoder.state !== 'closed' && !encodeError && !offlineAbortRequested && waitGuard < 1000) {
+    while (!framesOnly && encoder.encodeQueueSize > queueLimit && encoder.state !== 'closed' && !encodeError && !offlineAbortRequested && waitGuard < 1000) {
       if (!document.hidden) await new Promise(r => setTimeout(r, 8));
       waitGuard++;
     }
@@ -4828,15 +5876,32 @@ async function renderOffline(opts = {}) {
     if (offlineAbortRequested) break;
   }
 
+  if (!encodeError && !offlineAbortRequested) {
+    await encodeOutputFrame(flushGuardedFrame());
+  }
+
   // Only flush + finalize if encoder is still alive; a codec error above closes it.
   // On abort, skip flush+finalize — we discard the partial output.
-  const encoderOk = encoder.state !== 'closed' && !encodeError && !offlineAbortRequested;
+  const encoderOk = !framesOnly && encoder.state !== 'closed' && !encodeError && !offlineAbortRequested;
   if (encoderOk) {
     try { await encoder.flush(); } catch (e) { encodeError = e; console.error(e); }
   }
-  try { if (encoder.state !== 'closed') encoder.close(); } catch (e) { /* already closed */ }
-  if (!encodeError && !offlineAbortRequested) {
+  try { if (!framesOnly && encoder.state !== 'closed') encoder.close(); } catch (e) { /* already closed */ }
+  if (!framesOnly && !encodeError && !offlineAbortRequested) {
     try { muxer.finalize(); } catch (e) { encodeError = e; console.error(e); }
+  }
+  if (streamMp4 && !encodeError && !offlineAbortRequested) {
+    try {
+      await Promise.all(streamWritePromises);
+      const finished = await streamMp4.finish();
+      streamMp4Path = finished?.path || streamMp4Path;
+      streamMp4Bytes = finished?.bytes || 0;
+    } catch (e) {
+      encodeError = e;
+      console.error(e);
+    }
+  } else if (streamMp4 && (encodeError || offlineAbortRequested)) {
+    try { if (typeof streamMp4.abort === 'function') await streamMp4.abort(); } catch (_) {}
   }
 
   // Restore realtime state
@@ -4867,7 +5932,20 @@ async function renderOffline(opts = {}) {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.transmissionResolutionScale = savedTransmissionScale;
   ledMat.uniforms.uPanelSmooth.value = savedPanelSmooth;
-  ledMatB.uniforms.uPanelSmooth.value = savedPanelSmooth;
+  ledMatB.uniforms.uPanelSmooth.value = savedPanelSmoothB;
+  ledMat.uniforms.uScale.value = savedPanelScale;
+  ledMatB.uniforms.uScale.value = savedPanelScaleB;
+  ledMat.uniforms.uPatSharp.value = savedPatSharp;
+  ledMatB.uniforms.uPatSharp.value = savedPatSharpB;
+  ledMat.uniforms.uPanelContrast.value = savedPanelContrast;
+  ledMatB.uniforms.uPanelContrast.value = savedPanelContrastB;
+  ledMat.uniforms.uSpeed.value = savedPanelSpeed;
+  ledMatB.uniforms.uSpeed.value = savedPanelSpeedB;
+  ledMat.uniforms.uPgFlow.value = savedPgFlow;
+  ledMatB.uniforms.uPgFlow.value = savedPgFlowB;
+  ledMat.uniforms.uSqGradFlow.value = savedSqGradFlow;
+  ledMatB.uniforms.uSqGradFlow.value = savedSqGradFlowB;
+  restoreLensExportMaterials();
   composer.setPixelRatio(savedPixelRatio);
   composer.setSize(window.innerWidth, window.innerHeight);
   bloomPass.setSize(window.innerWidth, window.innerHeight);
@@ -4885,25 +5963,72 @@ async function renderOffline(opts = {}) {
   if (encodeError) {
     if (autoPausedForRender) { animPaused = false; clock.getDelta(); autoPausedForRender = false; guiRefresh(); }
     hideRenderOverlay();
-    setStatus('offline render failed — see console');
+    setStatus(framesOnly ? 'PNG sequence export failed — see console' : 'offline render failed — see console');
     return;
   }
 
-  const buffer = muxer.target.buffer;
-  const blob = new Blob([buffer], { type: 'video/mp4' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  const tag = state.recAspect.replace(/\s+/g, '_').replace(/:/g, 'x');
-  a.download = `prismatica_offline_${tag}_${W}x${H}_${fps}fps_${Date.now()}.mp4`;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  if (framesOnly) {
+    const tag = state.recAspect.replace(/\s+/g, '_').replace(/:/g, 'x');
+    pngFrames['README.txt'] = strToU8(
+      `Prismatica PNG frame sequence\n` +
+      `Size: ${W}x${H}\n` +
+      `FPS: ${fps}\n` +
+      `Frames: ${totalFrames}\n` +
+      `Import the PNG files as an image sequence at ${fps} fps.\n`
+    );
+    const zipBytes = zipSync(pngFrames, { level: 0 });
+    const zipBlob = new Blob([zipBytes], { type: 'application/zip' });
+    const fname = `prismatica_frames_${tag}_${W}x${H}_${fps}fps_${Date.now()}.zip`;
+    const saved = await saveRenderBlob(zipBlob, fname);
+    if (autoPausedForRender) { animPaused = false; clock.getDelta(); autoPausedForRender = false; guiRefresh(); }
+    hideRenderOverlay();
+    setStatus(`PNG sequence saved to ${saved.label} · ${W}×${H} · ${totalFrames} frames @ ${fps}fps · ${(zipBlob.size / 1048576).toFixed(1)} MB`);
+    return {
+      ok: true,
+      filename: fname,
+      label: saved.label,
+      direct: !!saved.direct,
+      kind: 'png-sequence',
+      width: W,
+      height: H,
+      fps,
+      frames: totalFrames,
+      bytes: zipBlob.size,
+    };
+  }
+
+  const buffer = streamMp4 ? null : muxer.target.buffer;
+  const blob = streamMp4 ? null : new Blob([buffer], { type: 'video/mp4' });
+  const fname = videoFilename;
+  const saved = streamMp4
+    ? { direct: true, label: streamMp4Path || 'Downloads', path: streamMp4Path }
+    : await saveRenderBlob(blob, fname);
   // Resume live animation BEFORE the final status message so the save message isn't overwritten.
   if (autoPausedForRender) { animPaused = false; clock.getDelta(); autoPausedForRender = false; guiRefresh(); }
   hideRenderOverlay();
   const smoothTag = ssaa > 1 ? ` · SSAA ${ssaa}×` : '';
   const mbps = (targetBitrate / 1_000_000).toFixed(0);
-  setStatus(`offline render saved · ${W}×${H} · ${duration}s @ ${fps}fps${smoothTag} · ${mbps} Mbps · ${(blob.size / 1048576).toFixed(1)} MB`);
+  const outlierTag = outputGuardFixes ? ` · fixed ${outputGuardFixes} flash${outputGuardFixes === 1 ? '' : 'es'}` : '';
+  const outputBytes = streamMp4 ? streamMp4Bytes : blob.size;
+  setStatus(`offline render saved to ${saved.label} · ${W}×${H} · ${duration}s @ ${fps}fps${smoothTag}${ssaaSafetyNote}${outlierTag} · ${mbps} Mbps · ${(outputBytes / 1048576).toFixed(1)} MB`);
+  return {
+    ok: true,
+    filename: fname,
+    label: saved.label,
+    direct: !!saved.direct,
+    path: saved.path || streamMp4Path || '',
+    streamed: !!streamMp4,
+    kind: 'mp4',
+    width: W,
+    height: H,
+    fps,
+    frames: totalFrames,
+    bytes: outputBytes,
+    requestedSsaa,
+    ssaa,
+    ssaaSafetyNote,
+    fixedFlashes: outputGuardFixes,
+  };
 }
 
 function animate() {
@@ -4939,13 +6064,23 @@ function animate() {
       if (pose) applyPose(pose);
     }
   }
+  const cameraMotionActive = sequencePlaying || state.autoOrbit || state.autoZoom || state.autoPan;
   updateCameraMotion(dt);
-  controls.update();
-  renderFrame();
+  const controlsChanged = !!controls.update();
+  if (cameraMotionActive && !controlsChanged && !userInteractingWithCamera && liveSettleFrames === 0) {
+    liveSettleFrames = 1;
+  }
+  const settleLiveTransmission = liveSettleFrames > 0;
+  applyStableLiveLensMaterial(settleLiveTransmission);
+  renderLiveFrame(settleLiveTransmission);
+  if (liveSettleFrames > 0) liveSettleFrames--;
+  if (liveSettleFrames === 0 && !userInteractingWithCamera && !cameraMotionActive) {
+    applyStableLiveLensMaterial(false);
+  }
   if (recUsesOffscreen && mediaRecorder && mediaRecorder.state === 'recording') drawRecFrame();
   fpsFrames++;
   const now = performance.now();
-  if (now - fpsLast > 500) {
+  if (now - fpsLast > 1000) {
     const fps = (fpsFrames * 1000) / (now - fpsLast);
     state.fpsText = `${fps.toFixed(0)} fps`;
     fpsFrames = 0; fpsLast = now;
@@ -4955,12 +6090,8 @@ function animate() {
 animate();
 
 // Always start with eco mode ON so the laptop stays cool on launch. Deferred
-// via queueMicrotask so it runs AFTER the rest of the module (specifically
-// after `let ecoModeActive` initialises further up). Without this defer we'd
-// hit a temporal-dead-zone ReferenceError and the app would render a black
-// screen on load. User can press E or click the floating ⚡ eco button to flip
-// it off when they want full live-view quality.
-// eco mode is OFF by default — user can enable via the ⚡ button or E key
+// Eco mode is retained internally for legacy presets, but the visible UI now
+// uses the clearer Actions → live quality selector.
 
 // -------------------------------------------------------------------------
 // Keyboard shortcuts  (H hide UI · F fullscreen · R record · Space auto-orbit
@@ -4995,7 +6126,7 @@ window.addEventListener('keydown', (e) => {
   }
   else if (k === 'r' || k === 'R') { toggleRecording(); e.preventDefault(); }
   else if (k === 'p' || k === 'P') { setAnimPaused(!animPaused); e.preventDefault(); }
-  else if (k === 'e' || k === 'E') { toggleEcoMode(); e.preventDefault(); }
+  else if (k === 'm' || k === 'M') { togglePresentationMode(); e.preventDefault(); }
   else if (k === 'n' || k === 'N') { addShotToSequence(); e.preventDefault(); }
   else if (k === 'Enter') {
     if (sequencePlaying) stopSequencePreview();
@@ -5029,10 +6160,18 @@ window.addEventListener('keydown', (e) => {
 window.__prismatica = {
   state, rebuildLenses, scene, camera, renderer, controls,
   ledMat, ledMatB, lensMaterial, lensMaterialB, LENS_TYPES,
+  applyPreset, guiRefresh, renderOffline, renderInDedicatedChrome, renderStateSnapshot,
   addShotToSequence, removeShotFromSequence, replaceShotInSequence,
   loadShotPose, clearShotSequence, moveShotInSequence,
   playSequencePreview, stopSequencePreview,
   evaluateSequenceAt, sequenceTotalDuration,
+  setShotSequence(sequence) {
+    shotSequence.length = 0;
+    if (Array.isArray(sequence)) shotSequence.push(...JSON.parse(JSON.stringify(sequence)));
+    saveShotSequence();
+    rebuildSequenceGUI();
+    guiRefresh();
+  },
   shotSequence: () => shotSequence,
 };
 </script>

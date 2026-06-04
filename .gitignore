@@ -2,9 +2,14 @@
 *.log
 .vscode/
 node_modules/
+__pycache__/
+*.pyc
 
 # STL exports — large binary files, regenerate from build-stl.mjs as needed
 exports/*.stl
 
 # Render screenshots — kept locally, no need in repo
 exports/comparisons/*.png
+
+# Generated CAD/video outputs — Railway should build these on demand
+exports/saved/
