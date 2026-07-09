@@ -64,6 +64,42 @@
   #dimPanel .row { display: flex; justify-content: space-between; gap: 18px; line-height: 1.6; }
   #dimPanel .row span:last-child { color: #fff; font-variant-numeric: tabular-nums; }
   body.render-mode #dimPanel { display: none !important; }
+
+  /* --- Centre section profile popout ------------------------------------- */
+  /* A live fabrication-style slice through the lens at y=0. This is the same
+     view Kit liked in the PDF, but driven directly by the current visualizer
+     height function so it can be checked before exporting a STEP file. */
+  #sectionProfilePanel {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    z-index: 16; width: min(620px, calc(100vw - 360px)); min-width: 380px;
+    background: rgba(246, 244, 239, 0.96); color: #25272d;
+    border: 1px solid rgba(190, 185, 172, 0.85); border-radius: 8px;
+    box-shadow: 0 18px 58px rgba(0,0,0,0.38);
+    padding: 12px 14px 10px 14px; display: none;
+    pointer-events: auto;
+  }
+  #sectionProfilePanel.on { display: block; }
+  #sectionProfilePanel .sectionHead {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 14px; margin-bottom: 8px;
+    font: 600 11px/1.2 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  #sectionProfilePanel .sectionHead span {
+    color: #6b6f78; font: 10px/1.2 "SF Mono", ui-monospace, Menlo, monospace;
+    letter-spacing: 0.04em; text-transform: none; font-weight: 500;
+  }
+  #sectionProfileClose {
+    appearance: none; border: 0; background: transparent; color: #6b6f78;
+    cursor: pointer; font: 18px/1 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    padding: 0 0 0 8px;
+  }
+  #sectionProfileClose:hover { color: #111; }
+  #sectionProfileCanvas {
+    display: block; width: 100%; height: 210px; border-radius: 5px;
+    background: #f6f4ef;
+  }
+  body.render-mode #sectionProfilePanel { display: none !important; }
   /* #status hidden — Kit doesn't want the bottom-of-screen "eco mode on" /
      "preset loaded" / "render saved" chatter cluttering the canvas. The element
      stays in the DOM so all the setStatus() calls scattered through the code
@@ -115,7 +151,7 @@
   /* ── Mobile: hide GUI panels, show preset bar ─────────────────────────── */
   @media (max-width: 768px) {
     .lil-gui { display: none !important; }
-    #ecoBtn, #shapeBtn, #hud, #fps, #dimPanel { display: none !important; }
+    #ecoBtn, #shapeBtn, #hud, #fps, #dimPanel, #sectionProfilePanel { display: none !important; }
     #mobilePresetBar { display: flex !important; }
   }
 
@@ -211,6 +247,14 @@ body.render-mode canvas { opacity: 0.01 !important; pointer-events: none !import
   <div class="row"><span>total height</span><span id="dimTotal">—</span></div>
   <div class="row"><span>narrowest</span><span id="dimNarrow">—</span></div>
   <div class="row"><span>est. mass (PMMA)</span><span id="dimMass">—</span></div>
+</div>
+<div id="sectionProfilePanel">
+  <div class="sectionHead">
+    <div>Centre horizontal section</div>
+    <span id="sectionProfileInfo">—</span>
+    <button id="sectionProfileClose" type="button" aria-label="Close section profile">×</button>
+  </div>
+  <canvas id="sectionProfileCanvas" width="620" height="210"></canvas>
 </div>
 <div id="status">loading…</div>
 <div id="stepExportToast" role="status" aria-live="polite"></div>
@@ -339,8 +383,8 @@ scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.1, 8000);
 camera.position.set(0, 220, 900);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
+controls.enableDamping = false;
+controls.dampingFactor = 0;
 controls.target.set(0, 0, 0);
 // minDistance was 200; dropped to 10 so the camera can push right up to the lens
 // surface for macro shots through individual ripples. maxDistance bumped so wide
@@ -348,8 +392,8 @@ controls.target.set(0, 0, 0);
 controls.minDistance = 10;
 controls.maxDistance = 6000;
 
-// While the user drags the camera, auto orbit/zoom/pan step aside so the
-// mouse wins. On release, the motion recenters on wherever the camera ended up.
+// Manual camera only. The live playground should stay still unless Kit moves it
+// directly or explicitly runs a saved shot sequence.
 let userInteractingWithCamera = false;
 let liveSettleFrames = 0;
 controls.addEventListener('start', () => {
@@ -1355,39 +1399,281 @@ function loadLogoUrl(url, name, onReady) {
 // -------------------------------------------------------------------------
 // Lens types
 // -------------------------------------------------------------------------
+function curveProfile01(v, curvature = 1.0) {
+  const c = Math.max(0.25, curvature ?? 1.0);
+  return Math.pow(Math.min(1, Math.max(0, v)), 1 / c);
+}
+
+function smootherStep01(v) {
+  const x = Math.min(1, Math.max(0, v));
+  return x * x * x * (x * (x * 6 - 15) + 10);
+}
+
+function rippleProfile01(v, curvature = 1.0, profile = 'current') {
+  const x = Math.min(1, Math.max(0, v));
+  if (profile === 'perfect_s_curve') {
+    return curveProfile01(smootherStep01(x), curvature);
+  }
+  return curveProfile01(x, curvature);
+}
+
+function continuousSRipple01(phase, curvature = 1.0) {
+  const p = ((phase % 1) + 1) % 1;
+  const half = p < 0.5 ? p * 2 : (1 - p) * 2;
+  return curveProfile01(smootherStep01(half), curvature);
+}
+
+function centerBulgeHeight(r, p) {
+  const h = Math.max(0, Number(p.center_bulge_height) || 0);
+  const radius = Math.max(0, Number(p.center_bulge_radius) || 0);
+  if (h <= 0 || radius <= 0) return 0;
+  const curve = Math.max(0.25, Number(p.center_bulge_curve) || 1.0);
+  const shoulder = Math.max(0, Math.min(1, Number(p.center_bulge_shoulder) || 0));
+  const t = Math.min(1, Math.max(0, r / radius));
+  const shoulderT = Math.pow(t, 1 + shoulder * 4);
+  const dome = 0.5 * (1 + Math.cos(Math.PI * shoulderT));
+  return h * curveProfile01(dome, curve);
+}
+
+function shapeRippleValue01(v, ridgeWidth = 0.5, contrast = 1.0, valleyLift = 0.0) {
+  let x = Math.min(1, Math.max(0, v));
+  const rw = Number(ridgeWidth);
+  const width = Math.min(1, Math.max(0, Number.isFinite(rw) ? rw : 0.5));
+  if (width > 0.5) {
+    x = Math.pow(x, 1 + (width - 0.5) * 8);
+  } else if (width < 0.5) {
+    x = 1 - Math.pow(1 - x, 1 + (0.5 - width) * 8);
+  }
+  const cv = Number(contrast);
+  const c = Math.max(0.1, Number.isFinite(cv) ? cv : 1.0);
+  x = Math.min(1, Math.max(0, 0.5 + (x - 0.5) * c));
+  const vl = Number(valleyLift);
+  const lift = Math.min(0.95, Math.max(0, Number.isFinite(vl) ? vl : 0));
+  return lift + (1 - lift) * x;
+}
+
+const RIPPLE_PROFILE_OPTIONS = {
+  current: 'current',
+  'perfect S-curve': 'perfect_s_curve',
+  'continuous S ripple': 'continuous_s_ripple',
+};
+
 const LENS_TYPES = {
+  round_sine_lens: {
+    label: 'Round Sine Lens',
+    footprint: 'circle',
+    params: {
+      diameter: { value: 500, min: 120, max: 700, step: 1, label: 'diameter (mm)' },
+      wavelength: { value: 70, min: 20, max: 160, step: 1 },
+      amplitude: { value: 14, min: 0, max: 80, step: 0.5, label: 'amplitude (mm)' },
+      visible_rings: { value: 4, min: 1, max: 8, step: 1, label: 'visible rings' },
+      outer_fade_width: { value: 18, min: 0, max: 80, step: 1, label: 'outer ring fade (mm)' },
+      edge_taper_width: { value: 50, min: 0, max: 160, step: 1, label: 'outer edge taper (mm)' },
+      ripple_phase: { value: 0.0, min: -1.0, max: 1.0, step: 0.01, label: 'ripple phase' },
+    },
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const radius = Math.max(1, Math.min(Number(p.diameter) || Math.min(W, H), Math.min(W, H)) * 0.5);
+      const wl = Math.max(1, Number(p.wavelength) || 70);
+      const amp = Math.max(0, Number(p.amplitude) || 0);
+      const visibleRings = Math.max(1, Math.round(Number(p.visible_rings) || 4));
+      const outerFade = Math.max(0, Number(p.outer_fade_width) || 0);
+      const edgeTaper = Math.max(0, Number(p.edge_taper_width) || 0);
+      const phase = Number(p.ripple_phase) || 0;
+      const cutoffRadius = Math.min(radius, Math.max(0, (visibleRings - 0.5) * wl));
+      return (x, y) => {
+        const r = Math.hypot(x, y);
+        if (r >= radius) return 0;
+        if (cutoffRadius > 0 && outerFade <= 0 && r >= cutoffRadius) return 0;
+        const wave = 0.5 * (1 + Math.cos(TAU * (r / wl + phase)));
+        const dEdge = radius - r;
+        const edgeEnv = edgeTaper <= 0 ? 1 : smootherStep01(dEdge / edgeTaper);
+        let ringEnv = 1;
+        if (cutoffRadius > 0) {
+          ringEnv = outerFade <= 0
+            ? (r < cutoffRadius ? 1 : 0)
+            : 1 - smootherStep01((r - (cutoffRadius - outerFade)) / outerFade);
+        }
+        return amp * wave * edgeEnv * Math.max(0, Math.min(1, ringEnv));
+      };
+    },
+  },
+  sine_wave_lens: {
+    label: 'Sine Wave Lens',
+    params: {
+      wavelength: { value: 70, min: 20, max: 160, step: 1 },
+      amplitude: { value: 14, min: 0, max: 80, step: 0.5, label: 'amplitude (mm)' },
+      visible_rings: { value: 4, min: 1, max: 8, step: 1, label: 'visible rings' },
+      outer_fade_width: { value: 18, min: 0, max: 80, step: 1, label: 'outer ring fade (mm)' },
+      edge_taper_width: { value: 50, min: 0, max: 160, step: 1, label: 'edge amplitude taper (mm)' },
+      ripple_phase: { value: 0.0, min: -1.0, max: 1.0, step: 0.01, label: 'ripple phase' },
+    },
+    // Low-profile concentric sine surface for fabrication trials. The visible
+    // ring count cuts the wave at the next trough, so partial corner-only rings
+    // flatten out instead of becoming misleading broken circles.
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const halfW = W * 0.5, halfH = H * 0.5;
+      const wl = Math.max(1, Number(p.wavelength) || 70);
+      const amp = Math.max(0, Number(p.amplitude) || 0);
+      const visibleRings = Math.max(1, Math.round(Number(p.visible_rings) || 4));
+      const outerFade = Math.max(0, Number(p.outer_fade_width) || 0);
+      const edgeTaper = Math.max(0, Number(p.edge_taper_width) || 0);
+      const phase = Number(p.ripple_phase) || 0;
+      const cutoffRadius = Math.max(0, (visibleRings - 0.5) * wl);
+      return (x, y) => {
+        const dEdge = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+        if (dEdge <= 0) return 0;
+        const r = Math.hypot(x, y);
+        if (cutoffRadius > 0 && outerFade <= 0 && r >= cutoffRadius) return 0;
+        const wave = 0.5 * (1 + Math.cos(TAU * (r / wl + phase)));
+        const edgeEnv = edgeTaper <= 0 ? 1 : smootherStep01(dEdge / edgeTaper);
+        let ringEnv = 1;
+        if (cutoffRadius > 0) {
+          ringEnv = outerFade <= 0
+            ? (r < cutoffRadius ? 1 : 0)
+            : 1 - smootherStep01((r - (cutoffRadius - outerFade)) / outerFade);
+        }
+        return amp * wave * edgeEnv * Math.max(0, Math.min(1, ringEnv));
+      };
+    },
+  },
   ripple_field: {
     label: 'Ripple Field',
     params: {
       wavelength:     { value: 70, min: 20, max: 200, step: 1 },
       amplitude:      { value: 8,  min: 0,  max: 100, step: 0.5 },
-      bulb_roundness: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'bulb roundness' },
-      curve_strength: { value: 1.0, min: 0.25, max: 3.0, step: 0.05, label: 'curve strength' },
-      edge_taper:     { value: 90, min: 0, max: 250, step: 1, label: 'edge flat taper (mm)' },
+      ripple_profile: { value: 'current', options: RIPPLE_PROFILE_OPTIONS, label: 'ripple profile' },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
+      ripple_phase: { value: 0.0, min: -1.0, max: 1.0, step: 0.01, label: 'ripple phase' },
+      ridge_width: { value: 0.5, min: 0.0, max: 1.0, step: 0.01, label: 'ridge width' },
+      ripple_contrast: { value: 1.0, min: 0.1, max: 4.0, step: 0.01, label: 'ripple contrast' },
+      valley_lift: { value: 0.0, min: 0.0, max: 0.8, step: 0.01, label: 'valley lift' },
+      ripple_stretch: { value: 1.0, min: 0.35, max: 2.5, step: 0.01, label: 'ripple stretch' },
+      ripple_angle: { value: 0, min: -180, max: 180, step: 1, label: 'ripple angle (deg)' },
+      radial_falloff: { value: 0.0, min: 0.0, max: 1.0, step: 0.01, label: 'outer falloff' },
+      center_bulge_height: { value: 0, min: 0, max: 100, step: 0.5, label: 'centre bulge height (mm)' },
+      center_bulge_radius: { value: 90, min: 5, max: 350, step: 1, label: 'centre bulge radius (mm)' },
+      center_bulge_curve: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'centre bulge curve' },
+      center_bulge_shoulder: { value: 0.0, min: 0.0, max: 1.0, step: 0.01, label: 'centre shoulder softness' },
+      edge_taper_width: { value: 70, min: 0, max: 220, step: 1, label: 'edge amplitude taper (mm)' },
     },
-    // Constant-amplitude concentric ripples covering the FULL panel rectangle,
-    // fading smoothly to flat in a margin near each edge. (Earlier this used a
-    // circular inscribed-circle mask which left flat corners on the lens — at
-    // angled camera views, light went through those flat corners un-refracted
-    // and you'd see the panel raw, reading as a glitch in the bottom of frame.)
+    // Constant-amplitude concentric ripples covering the full panel rectangle.
+    // The local edge taper softens ripple amplitude into the global flat border.
     fn: (p, W, H) => {
       const TAU = Math.PI * 2;
       const halfW = W * 0.5, halfH = H * 0.5;
-      const margin = Math.max(0, p.edge_taper ?? Math.min(W, H) * 0.18);
-      const roundness = Math.max(0.25, p.bulb_roundness ?? 1.0);
-      const curveStrength = Math.max(0.25, p.curve_strength ?? 1.0);
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? p.bulb_roundness ?? 1.0);
+      const rippleProfile = p.ripple_profile || 'current';
+      const legacyCurveStrength = Math.max(0.25, p.curve_strength ?? 1.0);
+      const edgeTaper = Math.max(0, Number(p.edge_taper_width) || 0);
+      const ripplePhase = TAU * (Number(p.ripple_phase) || 0);
+      const ridgeRaw = Number(p.ridge_width);
+      const ridgeWidth = Math.max(0, Math.min(1, Number.isFinite(ridgeRaw) ? ridgeRaw : 0.5));
+      const rippleContrast = Math.max(0.1, Number(p.ripple_contrast) || 1.0);
+      const valleyLift = Math.max(0, Math.min(0.8, Number(p.valley_lift) || 0));
+      const stretch = Math.max(0.1, Number(p.ripple_stretch) || 1);
+      const falloff = Math.max(0, Math.min(1, Number(p.radial_falloff) || 0));
+      const angle = (Number(p.ripple_angle) || 0) * Math.PI / 180;
+      const ca = Math.cos(angle), sa = Math.sin(angle);
+      const maxR = Math.hypot(halfW, halfH);
       return (x, y) => {
-        const dx = halfW - Math.abs(x);
-        const dy = halfH - Math.abs(y);
-        const d = Math.min(dx, dy);
-        if (d <= 0) return 0;
-        const tEdge = margin <= 0 ? 1 : Math.min(1, Math.max(0, d / margin));
-        const env = tEdge * tEdge * (3 - 2 * tEdge);
-        const r = Math.hypot(x, y);
-        const wave = 0.5 * (1 + Math.cos(TAU * r / p.wavelength));
-        const rounded = Math.pow(wave, 1 / roundness);
-        const curved = Math.pow(rounded, curveStrength);
-        return p.amplitude * curved * env;
+        const xr = x * ca + y * sa;
+        const yr = (-x * sa + y * ca) / stretch;
+        const r = Math.hypot(xr, yr);
+        const dEdge = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+        const edgeEnv = edgeTaper <= 0 ? 1 : smootherStep01(dEdge / edgeTaper);
+        const waveRaw = 0.5 * (1 + Math.cos(TAU * r / p.wavelength + ripplePhase));
+        const shaped = shapeRippleValue01(rippleProfile01(waveRaw, rippleCurvature, rippleProfile), ridgeWidth, rippleContrast, valleyLift);
+        const wave = Math.pow(shaped, legacyCurveStrength);
+        const radial = Math.min(1, r / maxR);
+        const falloffEnv = falloff <= 0 ? 1 : Math.pow(1 - smootherStep01(radial), falloff * 1.8);
+        return p.amplitude * wave * edgeEnv * falloffEnv + centerBulgeHeight(r, p);
+      };
+    },
+  },
+  gravitational_wave: {
+    label: 'Gravitational Wave',
+    params: {
+      wavelength: { value: 58, min: 16, max: 180, step: 1 },
+      amplitude: { value: 28, min: 0, max: 140, step: 0.5 },
+      source_separation: { value: 120, min: 0, max: 320, step: 1, label: 'binary source separation (mm)' },
+      source_balance: { value: 0.5, min: 0, max: 1, step: 0.01, label: 'binary balance' },
+      interference_strength: { value: 0.65, min: 0, max: 1, step: 0.01, label: 'interference strength' },
+      spiral_twist: { value: 2.2, min: -8, max: 8, step: 0.05, label: 'spiral twist' },
+      chirp: { value: 0.38, min: -1.5, max: 1.5, step: 0.01, label: 'chirp compression' },
+      ellipticity: { value: 1.0, min: 0.35, max: 2.5, step: 0.01, label: 'space stretch' },
+      falloff: { value: 0.25, min: 0, max: 1, step: 0.01, label: 'outer falloff' },
+      ripple_profile: { value: 'continuous_s_ripple', options: RIPPLE_PROFILE_OPTIONS, label: 'ripple profile' },
+      ripple_curvature: { value: 1.25, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
+      ripple_phase: { value: 0.0, min: -1.0, max: 1.0, step: 0.01, label: 'ripple phase' },
+      source_phase_offset: { value: 0.41, min: 0.0, max: 1.0, step: 0.01, label: 'source phase offset' },
+      ridge_width: { value: 0.5, min: 0.0, max: 1.0, step: 0.01, label: 'ridge width' },
+      ripple_contrast: { value: 1.0, min: 0.1, max: 4.0, step: 0.01, label: 'ripple contrast' },
+      valley_lift: { value: 0.0, min: 0.0, max: 0.8, step: 0.01, label: 'valley lift' },
+      edge_taper_width: { value: 70, min: 0, max: 240, step: 1, label: 'edge amplitude taper (mm)' },
+      center_bulge_height: { value: 12, min: 0, max: 120, step: 0.5, label: 'centre bulge height (mm)' },
+      center_bulge_radius: { value: 130, min: 5, max: 380, step: 1, label: 'centre bulge radius (mm)' },
+      center_bulge_curve: { value: 1.2, min: 0.25, max: 4.0, step: 0.05, label: 'centre bulge curve' },
+      center_bulge_shoulder: { value: 0.35, min: 0, max: 1, step: 0.01, label: 'centre shoulder softness' },
+      orbit_angle: { value: 0, min: -180, max: 180, step: 1, label: 'orbit angle (deg)' },
+    },
+    // Artistic binary-source gravitational wave field. Two source ripples
+    // interfere, then a spiral/chirp term bends the wavefronts into a warped
+    // spacetime look while staying deterministic for STEP export.
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const halfW = W * 0.5, halfH = H * 0.5;
+      const maxR = Math.hypot(halfW, halfH);
+      const wl = Math.max(1, Number(p.wavelength) || 58);
+      const amp = Math.max(0, Number(p.amplitude) || 0);
+      const sep = Math.max(0, Number(p.source_separation) || 0);
+      const balance = Math.max(0, Math.min(1, Number(p.source_balance) || 0.5));
+      const interference = Math.max(0, Math.min(1, Number(p.interference_strength) || 0));
+      const twist = Number(p.spiral_twist) || 0;
+      const chirp = Number(p.chirp) || 0;
+      const ellipticity = Math.max(0.1, Number(p.ellipticity) || 1);
+      const falloff = Math.max(0, Math.min(1, Number(p.falloff) || 0));
+      const edgeTaper = Math.max(0, Number(p.edge_taper_width) || 0);
+      const curvature = Math.max(0.25, Number(p.ripple_curvature) || 1);
+      const profile = p.ripple_profile || 'current';
+      const ripplePhase = TAU * (Number(p.ripple_phase) || 0);
+      const sourcePhase = TAU * Math.max(0, Math.min(1, Number(p.source_phase_offset) || 0.41));
+      const ridgeRaw = Number(p.ridge_width);
+      const ridgeWidth = Math.max(0, Math.min(1, Number.isFinite(ridgeRaw) ? ridgeRaw : 0.5));
+      const rippleContrast = Math.max(0.1, Number(p.ripple_contrast) || 1.0);
+      const valleyLift = Math.max(0, Math.min(0.8, Number(p.valley_lift) || 0));
+      const angle = (Number(p.orbit_angle) || 0) * Math.PI / 180;
+      const ca = Math.cos(angle), sa = Math.sin(angle);
+
+      return (x, y) => {
+        const xr = x * ca + y * sa;
+        const yr = (-x * sa + y * ca) / ellipticity;
+        const rMid = Math.hypot(xr, yr);
+        const theta = Math.atan2(yr, xr);
+        const r1 = Math.hypot(xr + sep * 0.5, yr);
+        const r2 = Math.hypot(xr - sep * 0.5, yr);
+        const dEdge = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+        if (dEdge <= 0) return 0;
+
+        const bend = twist * theta + TAU * chirp * (rMid * rMid) / Math.max(1, maxR * wl);
+        const waveAt = (r, phase) => {
+          const raw = 0.5 + 0.5 * Math.cos(TAU * (r / wl) + bend + ripplePhase + phase);
+          return shapeRippleValue01(rippleProfile01(raw, curvature, profile), ridgeWidth, rippleContrast, valleyLift);
+        };
+
+        const w1 = waveAt(r1, 0);
+        const w2 = waveAt(r2, sourcePhase);
+        const binary = w1 * (1 - balance) + w2 * balance;
+        const interferenceBands = shapeRippleValue01(rippleProfile01(Math.abs(w1 - w2), curvature, profile), ridgeWidth, rippleContrast, valleyLift);
+        const spiralRaw = 0.5 + 0.5 * Math.cos(TAU * (rMid / wl) + bend + ripplePhase);
+        const spiral = shapeRippleValue01(rippleProfile01(spiralRaw, curvature, profile), ridgeWidth, rippleContrast, valleyLift);
+        const wave = binary * (1 - interference) + ((interferenceBands + spiral) * 0.5) * interference;
+
+        const edgeEnv = edgeTaper <= 0 ? 1 : smootherStep01(dEdge / edgeTaper);
+        const radial = Math.min(1, rMid / maxR);
+        const falloffEnv = falloff <= 0 ? 1 : Math.pow(1 - smootherStep01(radial), falloff * 1.8);
+        return amp * wave * edgeEnv * falloffEnv + centerBulgeHeight(rMid, p);
       };
     },
   },
@@ -1395,14 +1681,22 @@ const LENS_TYPES = {
     label: 'Stepped Ripple',
     params: {
       wavelength: { value: 42,   min: 20,   max: 200, step: 1 },
-      amplitude:  { value: 100,  min: 0,    max: 200, step: 1, label: 'central peak (mm)' },
+      amplitude:  { value: 100,  min: 0,    max: 200, step: 1, label: 'amplitude (mm)' },
       step:       { value: 10,   min: 0,    max: 60,  step: 0.5, label: 'drop per ripple (mm)' },
-      // edgeFade: ratio of the panel's short side that fades to flat at the
-      // rim. 0 = ripples run all the way to the edge (sharp termination, may
-      // look harsh and create un-refracted slivers if the wave isn't at zero).
-      // 0.5 = the middle of the panel is flat-zero except for a brief peak.
-      // Lower this to make the ripples WIDER / cover more of the slab.
-      edgeFade:   { value: 0.18, min: 0.0,  max: 0.5, step: 0.005, label: 'edge fade (0=widest)' },
+      ripple_profile: { value: 'continuous_s_ripple', options: RIPPLE_PROFILE_OPTIONS, label: 'ripple profile' },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
+      ripple_phase: { value: 0.0, min: -1.0, max: 1.0, step: 0.01, label: 'ripple phase' },
+      ridge_width: { value: 0.5, min: 0.0, max: 1.0, step: 0.01, label: 'ridge width' },
+      ripple_contrast: { value: 1.0, min: 0.1, max: 4.0, step: 0.01, label: 'ripple contrast' },
+      valley_lift: { value: 0.0, min: 0.0, max: 0.8, step: 0.01, label: 'valley lift' },
+      ripple_stretch: { value: 1.0, min: 0.35, max: 2.5, step: 0.01, label: 'ripple stretch' },
+      ripple_angle: { value: 0, min: -180, max: 180, step: 1, label: 'ripple angle (deg)' },
+      radial_falloff: { value: 0.0, min: 0.0, max: 1.0, step: 0.01, label: 'outer falloff' },
+      center_bulge_height: { value: 0, min: 0, max: 120, step: 0.5, label: 'centre bulge height (mm)' },
+      center_bulge_radius: { value: 90, min: 5, max: 350, step: 1, label: 'centre bulge radius (mm)' },
+      center_bulge_curve: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'centre bulge curve' },
+      center_bulge_shoulder: { value: 0.0, min: 0.0, max: 1.0, step: 0.01, label: 'centre shoulder softness' },
+      edge_taper_width: { value: 50, min: 0, max: 220, step: 1, label: 'edge amplitude taper (mm)' },
       // bumpSharp: 0..1 slider mapped to a dramatic shape transform.
       //   0.0 = flat-topped ridges with steep walls (like rounded square wave)
       //   0.5 = default cosine (smooth sinusoidal bumps)
@@ -1418,11 +1712,27 @@ const LENS_TYPES = {
       const TAU = Math.PI * 2;
       const halfW = W * 0.5, halfH = H * 0.5;
       const wl   = Math.max(1, p.wavelength);
-      const amp  = p.amplitude;
+      const ampRaw = Number(p.amplitude);
+      const amp  = Math.max(0, Number.isFinite(ampRaw) ? ampRaw : 100);
+      const ampScale = amp / 100;
       const step = p.step != null ? p.step : 10;
-      const fadeRatio = p.edgeFade != null ? p.edgeFade : 0.18;
+      const legacyFadeRatio = p.edgeFade != null ? p.edgeFade : 0.18;
+      const taperRaw = Number(p.edge_taper_width);
+      const edgeTaper = Number.isFinite(taperRaw) ? Math.max(0, taperRaw) : Math.min(W, H) * legacyFadeRatio;
       const sharp = p.bumpSharp != null ? p.bumpSharp : 0.5;
-      const margin = Math.max(0.0001, Math.min(W, H) * fadeRatio);
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
+      const rippleProfile = p.ripple_profile || 'current';
+      const ripplePhase = Number(p.ripple_phase) || 0;
+      const ridgeRaw = Number(p.ridge_width);
+      const ridgeWidth = Math.max(0, Math.min(1, Number.isFinite(ridgeRaw) ? ridgeRaw : 0.5));
+      const rippleContrast = Math.max(0.1, Number(p.ripple_contrast) || 1.0);
+      const valleyLift = Math.max(0, Math.min(0.8, Number(p.valley_lift) || 0));
+      const stretch = Math.max(0.1, Number(p.ripple_stretch) || 1);
+      const falloff = Math.max(0, Math.min(1, Number(p.radial_falloff) || 0));
+      const angle = (Number(p.ripple_angle) || 0) * Math.PI / 180;
+      const ca = Math.cos(angle), sa = Math.sin(angle);
+      const maxR = Math.hypot(halfW, halfH);
+      const margin = Math.max(0.0001, edgeTaper);
       // Map slider 0..1 to a clearly-visible bump shape transform:
       //   0.0 = wide flat plateaus (rounded-square wave)
       //   0.5 = pass-through cosine
@@ -1447,11 +1757,22 @@ const LENS_TYPES = {
         const d = Math.min(dx, dy);
         if (d <= 0) return 0;
         const env = d >= margin ? 1 : 0.5 * (1 - Math.cos(Math.PI * (d / margin)));
-        const r = Math.hypot(x, y);
+        const xr = x * ca + y * sa;
+        const yr = (-x * sa + y * ca) / stretch;
+        const r = Math.hypot(xr, yr);
         const ampLocal = Math.max(0, amp - step * (r / wl));
-        const waveRaw = 0.5 * (1 + Math.cos(TAU * r / wl));
-        const wave = reshape(waveRaw);
-        return ampLocal * wave * env;
+        const bulge = centerBulgeHeight(r, p) * ampScale;
+        const radial = Math.min(1, r / maxR);
+        const falloffEnv = falloff <= 0 ? 1 : Math.pow(1 - smootherStep01(radial), falloff * 1.8);
+        const waveRaw = 0.5 * (1 + Math.cos(TAU * (r / wl + ripplePhase)));
+        if (rippleProfile === 'continuous_s_ripple') {
+          const shaped = reshape(continuousSRipple01(r / wl + ripplePhase, rippleCurvature));
+          const wave = shapeRippleValue01(shaped, ridgeWidth, rippleContrast, valleyLift);
+          return (ampLocal * wave * falloffEnv + bulge) * env;
+        }
+        const shapedWave = rippleProfile === 'perfect_s_curve' ? waveRaw : reshape(waveRaw);
+        const wave = shapeRippleValue01(rippleProfile01(shapedWave, rippleCurvature, rippleProfile), ridgeWidth, rippleContrast, valleyLift);
+        return (ampLocal * wave * falloffEnv + bulge) * env;
       };
     },
   },
@@ -1463,6 +1784,7 @@ const LENS_TYPES = {
       torus_outer_r: { value: 50, min: 10, max: 120, step: 1 },
       torus_inner_r: { value: 18, min: 1,  max: 80,  step: 1 },
       torus_height:  { value: 14, min: 1,  max: 40,  step: 0.5 },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
     },
     fn: (p, W, H) => {
       const cx = [], cy = [];
@@ -1470,6 +1792,7 @@ const LENS_TYPES = {
       for (let j = 0; j < p.rows; j++) cy.push(-H/2 + (j + 1) * H/(p.rows + 1));
       const midR = (p.torus_outer_r + p.torus_inner_r) / 2;
       const wallR = Math.max(0.1, (p.torus_outer_r - p.torus_inner_r) / 2);
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
       return (x, y) => {
         let z = 0;
         for (const a of cx) for (const b of cy) {
@@ -1477,7 +1800,7 @@ const LENS_TYPES = {
           const diff = r - midR;
           const inside = wallR * wallR - diff * diff;
           if (inside > 0) {
-            const h = p.torus_height * Math.sqrt(inside) / wallR;
+            const h = p.torus_height * curveProfile01(Math.sqrt(inside) / wallR, rippleCurvature);
             if (h > z) z = h;
           }
         }
@@ -1490,12 +1813,14 @@ const LENS_TYPES = {
     params: {
       cell_size:  { value: 40, min: 10, max: 120, step: 1 },
       cell_depth: { value: 6,  min: 0,  max: 30,  step: 0.5 },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
       invert:     { value: false },
     },
     fn: (p, W, H) => {
       const dx = p.cell_size * 1.5;
       const dy = p.cell_size * Math.sqrt(3);
       const radius = p.cell_size * 0.85;
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
       const ncols = Math.ceil(W / dx) + 2;
       const nrows = Math.ceil(H / dy) + 2;
       const centres = [];
@@ -1511,7 +1836,7 @@ const LENS_TYPES = {
         for (const [a, b] of centres) {
           const r = Math.hypot(x - a, y - b);
           if (r < radius) {
-            const bowl = 0.5 * (1 - Math.cos(Math.PI * r / radius)) * p.cell_depth;
+            const bowl = curveProfile01(0.5 * (1 - Math.cos(Math.PI * r / radius)), rippleCurvature) * p.cell_depth;
             if (bowl < z) z = bowl;
           }
         }
@@ -1528,10 +1853,12 @@ const LENS_TYPES = {
       max_r:   { value: 75, min: 20, max: 200, step: 1 },
       min_h:   { value: 8,  min: 0,  max: 30,  step: 0.5 },
       max_h:   { value: 22, min: 1,  max: 50,  step: 0.5 },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
     },
     fn: (p, W, H) => {
       const rng = mulberry32(p.seed);
       const margin = Math.max(p.min_r, p.max_r);
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
       const bulbs = [];
       for (let i = 0; i < p.n_bulbs; i++) {
         const cx = rng() * (W - 2 * margin) - (W/2 - margin);
@@ -1545,7 +1872,7 @@ const LENS_TYPES = {
         for (const [cx, cy, radius, hpk] of bulbs) {
           const r = Math.hypot(x - cx, y - cy);
           if (r < radius) {
-            const h = hpk * 0.5 * (1 + Math.cos(Math.PI * r / radius));
+            const h = hpk * curveProfile01(0.5 * (1 + Math.cos(Math.PI * r / radius)), rippleCurvature);
             if (h > z) z = h;
           }
         }
@@ -1559,15 +1886,17 @@ const LENS_TYPES = {
       cols:      { value: 8,  min: 1,  max: 24, step: 1 },
       rows:      { value: 8,  min: 1,  max: 24, step: 1 },
       pyramid_h: { value: 20, min: 1,  max: 60, step: 0.5 },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
     },
     fn: (p, W, H) => {
       const cellW = W / p.cols;
       const cellH = H / p.rows;
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
       return (x, y) => {
         const u = (((x + W/2) % cellW) + cellW) % cellW / cellW - 0.5;
         const v = (((y + H/2) % cellH) + cellH) % cellH / cellH - 0.5;
         const d = Math.max(Math.abs(u), Math.abs(v)) * 2;
-        return Math.max(0, Math.min(p.pyramid_h, p.pyramid_h * (1 - d)));
+        return Math.max(0, Math.min(p.pyramid_h, p.pyramid_h * curveProfile01(1 - d, rippleCurvature)));
       };
     },
   },
@@ -1576,6 +1905,7 @@ const LENS_TYPES = {
     params: {
       radius: { value: 280, min: 50, max: 600, step: 1 },
       height: { value: 40,  min: 1,  max: 120, step: 1 },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
     },
     // Spherical cap: section of a sphere with footprint radius `radius` and
     // central height `height`. Uniformly convex (no inflection, no flared rim),
@@ -1585,12 +1915,13 @@ const LENS_TYPES = {
     fn: (p) => {
       const R = p.radius;
       const h = Math.max(0.0001, p.height);
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
       const Rs = (R * R + h * h) / (2 * h);  // sphere radius from chord & sagitta
       const cz = h - Rs;                      // sphere centre on the z-axis
       return (x, y) => {
         const r2 = x * x + y * y;
         if (r2 >= R * R) return 0;
-        return cz + Math.sqrt(Rs * Rs - r2);
+        return h * curveProfile01((cz + Math.sqrt(Rs * Rs - r2)) / h, rippleCurvature);
       };
     },
   },
@@ -1599,6 +1930,8 @@ const LENS_TYPES = {
     params: {
       wavelength:   { value: 40,  min: 10, max: 200, step: 1 },
       amplitude:    { value: 12,  min: 0,  max: 200, step: 0.5, label: 'bump height (mm)' },
+      ripple_profile: { value: 'current', options: RIPPLE_PROFILE_OPTIONS, label: 'ripple profile' },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
       morph_period: { value: 2,   min: 1,  max: 8,   step: 1 },
       bias:         { value: 0.5, min: 0,  max: 1,   step: 0.02 },
       phase_shift:  { value: 0,   min: 0,  max: 1,   step: 0.01 },
@@ -1607,6 +1940,8 @@ const LENS_TYPES = {
       const TAU = Math.PI * 2;
       const maxD = Math.min(W, H) * 0.5;
       const period = Math.max(1, p.morph_period);
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
+      const rippleProfile = p.ripple_profile || 'current';
       return (x, y) => {
         const ax = Math.abs(x), ay = Math.abs(y);
         const dSq = Math.max(ax, ay);       // Chebyshev — square
@@ -1623,7 +1958,10 @@ const LENS_TYPES = {
         // Soft radial fall-off so edges taper gracefully
         const fade = 0.5 * (1 + Math.cos(Math.PI * d / maxD));
         // Concentric ridges along the morphed distance
-        const ridge = 0.5 * (1 + Math.sin(TAU * (d / p.wavelength + p.phase_shift)));
+        const ridgeBase = 0.5 * (1 + Math.sin(TAU * (d / p.wavelength + p.phase_shift)));
+        // 1.0 preserves existing presets. Lower values pinch the rings into
+        // sharper ridges; higher values make them broader and more bulbous.
+        const ridge = rippleProfile01(ridgeBase, rippleCurvature, rippleProfile);
         return p.amplitude * ridge * fade;
       };
     },
@@ -1635,6 +1973,7 @@ const LENS_TYPES = {
       rows:         { value: 4,  min: 1,  max: 10,  step: 1 },
       size:         { value: 70, min: 20, max: 200, step: 1 },
       height:       { value: 16, min: 1,  max: 40,  step: 0.5 },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
       asymmetry:    { value: 0.5, min: 0.0, max: 0.9, step: 0.05 },
       rot_variance: { value: 0.8, min: 0,   max: 1,   step: 0.05 },
       jitter:       { value: 0.3, min: 0,   max: 0.6, step: 0.05 },
@@ -1642,6 +1981,7 @@ const LENS_TYPES = {
     },
     fn: (p, W, H) => {
       const rng = mulberry32(p.seed);
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
       const dxC = W / p.cols;
       const dyC = H / p.rows;
       const drops = [];
@@ -1665,7 +2005,7 @@ const LENS_TYPES = {
           const rMax = p.size * (1 + p.asymmetry * Math.cos(theta));
           if (r >= rMax) continue;
           const t = r / rMax;
-          const v = p.height * 0.5 * (1 + Math.cos(Math.PI * t));
+          const v = p.height * curveProfile01(0.5 * (1 + Math.cos(Math.PI * t)), rippleCurvature);
           if (v > z) z = v;
         }
         return z;
@@ -1678,6 +2018,8 @@ const LENS_TYPES = {
       wavelength_x: { value: 80, min: 20, max: 300, step: 1 },
       wavelength_y: { value: 80, min: 20, max: 300, step: 1 },
       amplitude:    { value: 10, min: 0,  max: 100,  step: 0.5 },
+      ripple_profile: { value: 'current', options: RIPPLE_PROFILE_OPTIONS, label: 'ripple profile' },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
       diagonal_mix: { value: 0.0, min: 0, max: 1,   step: 0.05 },
       rotation:     { value: 0,  min: 0,  max: 90,  step: 1 },
     },
@@ -1685,6 +2027,8 @@ const LENS_TYPES = {
       const rad = p.rotation * Math.PI / 180;
       const ca = Math.cos(rad), sa = Math.sin(rad);
       const avg = (p.wavelength_x + p.wavelength_y) / 2;
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
+      const rippleProfile = p.ripple_profile || 'current';
       return (x, y) => {
         const rx = x * ca + y * sa;
         const ry = -x * sa + y * ca;
@@ -1693,7 +2037,7 @@ const LENS_TYPES = {
         const d1 = Math.sin(2 * Math.PI * (rx + ry) / avg);
         const d2 = Math.sin(2 * Math.PI * (rx - ry) / avg);
         const val = (wx + wy) * (1 - p.diagonal_mix) + (d1 + d2) * p.diagonal_mix;
-        return p.amplitude * 0.25 * (2 + val);
+        return p.amplitude * rippleProfile01(0.25 * (2 + val), rippleCurvature, rippleProfile);
       };
     },
   },
@@ -1701,6 +2045,7 @@ const LENS_TYPES = {
     label: 'Custom Logo',
     params: {
       height:  { value: 30, min: 1,  max: 80,  step: 0.5 },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
       falloff: { value: 0.15, min: 0, max: 0.5, step: 0.01 },
       invert:  { value: false },
       threshold: { value: 0.5, min: 0.0, max: 1.0, step: 0.01 },
@@ -1724,7 +2069,7 @@ const LENS_TYPES = {
         let t = alpha * raw + (1 - alpha) * (p.invert ? 1 : 0);
         const soft = Math.max(0.001, p.falloff);
         t = Math.min(1, Math.max(0, (t - p.threshold + soft) / (2 * soft)));
-        const shaped = 0.5 * (1 - Math.cos(Math.PI * t));
+        const shaped = curveProfile01(0.5 * (1 - Math.cos(Math.PI * t)), p.ripple_curvature ?? 1.0);
         return shaped * p.height;
       };
     },
@@ -1735,11 +2080,13 @@ const LENS_TYPES = {
       n_seeds: { value: 20, min: 3, max: 80,  step: 1 },
       seed:    { value: 5,  min: 0, max: 999, step: 1 },
       height:  { value: 18, min: 1, max: 50,  step: 0.5 },
+      ripple_curvature: { value: 1.0, min: 0.25, max: 4.0, step: 0.05, label: 'ripple curvature' },
       fill:    { value: 0.85, min: 0.2, max: 1.0, step: 0.02 },
     },
     fn: (p, W, H) => {
       const rng = mulberry32(p.seed);
       const margin = 20;
+      const rippleCurvature = Math.max(0.25, p.ripple_curvature ?? 1.0);
       const seeds = [];
       for (let i = 0; i < p.n_seeds; i++) {
         seeds.push([
@@ -1757,7 +2104,7 @@ const LENS_TYPES = {
         const rCell = (d1 + d2) * 0.5 * p.fill;
         if (d1 > rCell) return 0;
         const t = d1 / rCell;
-        return p.height * 0.5 * (1 + Math.cos(Math.PI * t));
+        return p.height * curveProfile01(0.5 * (1 + Math.cos(Math.PI * t)), rippleCurvature);
       };
     },
   },
@@ -1766,45 +2113,58 @@ const LENS_TYPES = {
 // -------------------------------------------------------------------------
 // Geometry
 // -------------------------------------------------------------------------
-function makeLensGeometry(heightFn, width, height, resolution, thickness, smoothing = 0) {
+function buildLensHeightGrid(heightFn, width, height, resolution, smoothing = 0) {
   const nx = Math.max(4, Math.floor(width / resolution) + 1);
   const ny = Math.max(4, Math.floor(height / resolution) + 1);
-
-  // Pre-sample the height field into a grid so we can blur it before emitting vertices.
   const grid = new Float32Array(nx * ny);
   for (let i = 0; i < ny; i++) {
-    const y = -height/2 + (i / (ny - 1)) * height;
+    const y = -height / 2 + (i / (ny - 1)) * height;
     for (let j = 0; j < nx; j++) {
-      const x = -width/2 + (j / (nx - 1)) * width;
+      const x = -width / 2 + (j / (nx - 1)) * width;
       grid[i * nx + j] = heightFn(x, y);
     }
   }
-  // Separable box-blur passes for cheap surface smoothing. Each pass is ~O(nx·ny).
-  const passes = Math.max(0, smoothing | 0);
-  if (passes > 0) {
-    const tmp = new Float32Array(nx * ny);
-    for (let p = 0; p < passes; p++) {
-      // Horizontal
-      for (let i = 0; i < ny; i++) {
-        const row = i * nx;
-        for (let j = 0; j < nx; j++) {
-          const l = j > 0 ? grid[row + j - 1] : grid[row + j];
-          const c = grid[row + j];
-          const r = j < nx - 1 ? grid[row + j + 1] : grid[row + j];
-          tmp[row + j] = (l + c + c + r) * 0.25;
-        }
-      }
-      // Vertical
-      for (let j = 0; j < nx; j++) {
-        for (let i = 0; i < ny; i++) {
-          const u = i > 0 ? tmp[(i - 1) * nx + j] : tmp[i * nx + j];
-          const c = tmp[i * nx + j];
-          const d = i < ny - 1 ? tmp[(i + 1) * nx + j] : tmp[i * nx + j];
-          grid[i * nx + j] = (u + c + c + d) * 0.25;
-        }
-      }
-    }
+
+  // Blur by real millimetres, not by a tiny fixed one-cell pass. This makes the
+  // "bump smoothness" slider visibly affect high-resolution meshes and keeps
+  // the live view aligned with the fabricator STEP exporter.
+  const smoothMm = Math.max(0, Number(smoothing) || 0);
+  const radiusCells = Math.round(smoothMm / Math.max(0.001, resolution));
+  if (radiusCells > 0) {
+    applyBoxBlurGrid(grid, nx, ny, radiusCells);
+    reapplyFlatEdgeToGrid(grid, nx, ny, width, height);
   }
+
+  if (state.stepSurfacePreview) {
+    applyStepSurfacePreview(grid, nx, ny, width, height);
+  }
+
+  return { grid, nx, ny };
+}
+
+function sampleHeightGrid(grid, nx, ny, width, height, x, y) {
+  const gx = ((x + width * 0.5) / width) * (nx - 1);
+  const gy = ((y + height * 0.5) / height) * (ny - 1);
+  const x0 = Math.max(0, Math.min(nx - 1, Math.floor(gx)));
+  const y0 = Math.max(0, Math.min(ny - 1, Math.floor(gy)));
+  const x1 = Math.min(nx - 1, x0 + 1);
+  const y1 = Math.min(ny - 1, y0 + 1);
+  const tx = gx - x0;
+  const ty = gy - y0;
+  const a = grid[y0 * nx + x0] * (1 - tx) + grid[y0 * nx + x1] * tx;
+  const b = grid[y1 * nx + x0] * (1 - tx) + grid[y1 * nx + x1] * tx;
+  return a * (1 - ty) + b * ty;
+}
+
+function makeLensGeometry(heightFn, width, height, resolution, thickness, smoothing = 0) {
+  return makeLensGeometryForFootprint(heightFn, width, height, resolution, thickness, smoothing, { kind: 'rect' });
+}
+
+function makeLensGeometryForFootprint(heightFn, width, height, resolution, thickness, smoothing = 0, footprint = { kind: 'rect' }) {
+  if (footprint && footprint.kind === 'circle') {
+    return makeCircularLensGeometry(heightFn, footprint.radius, resolution, thickness);
+  }
+  const { grid, nx, ny } = buildLensHeightGrid(heightFn, width, height, resolution, smoothing);
 
   const verts = [];
   const indices = [];
@@ -1854,6 +2214,331 @@ function makeLensGeometry(heightFn, width, height, resolution, thickness, smooth
   geo.setIndex(indices);
   geo.computeVertexNormals();
   return geo;
+}
+
+function makeCircularLensGeometry(heightFn, radius, resolution, thickness) {
+  const rMax = Math.max(1, Number(radius) || 1);
+  const radialStep = Math.max(1.0, Number(resolution) || 1.0);
+  const rings = Math.max(8, Math.min(420, Math.ceil(rMax / radialStep)));
+  const segStep = Math.max(1.0, radialStep * 2.5);
+  const segments = Math.max(96, Math.min(720, Math.ceil((Math.PI * 2 * rMax) / segStep)));
+  const verts = [];
+  const indices = [];
+  const vert = (x, y, z) => { const id = verts.length / 3; verts.push(x, y, z); return id; };
+
+  const topCenter = vert(0, 0, heightFn(0, 0));
+  const botCenter = vert(0, 0, -thickness);
+  const topRings = [];
+  const botRings = [];
+  for (let ri = 1; ri <= rings; ri++) {
+    const rr = rMax * ri / rings;
+    const rowT = [];
+    const rowB = [];
+    for (let si = 0; si < segments; si++) {
+      const a = Math.PI * 2 * si / segments;
+      const x = Math.cos(a) * rr;
+      const y = Math.sin(a) * rr;
+      rowT.push(vert(x, y, heightFn(x, y)));
+      rowB.push(vert(x, y, -thickness));
+    }
+    topRings.push(rowT);
+    botRings.push(rowB);
+  }
+
+  const firstTop = topRings[0];
+  const firstBot = botRings[0];
+  for (let si = 0; si < segments; si++) {
+    const sn = (si + 1) % segments;
+    indices.push(topCenter, firstTop[si], firstTop[sn]);
+    indices.push(botCenter, firstBot[sn], firstBot[si]);
+  }
+
+  for (let ri = 0; ri < rings - 1; ri++) {
+    const t0 = topRings[ri], t1 = topRings[ri + 1];
+    const b0 = botRings[ri], b1 = botRings[ri + 1];
+    for (let si = 0; si < segments; si++) {
+      const sn = (si + 1) % segments;
+      indices.push(t0[si], t1[si], t1[sn], t0[si], t1[sn], t0[sn]);
+      indices.push(b0[si], b1[sn], b1[si], b0[si], b0[sn], b1[sn]);
+    }
+  }
+
+  const outerTop = topRings[rings - 1];
+  const outerBot = botRings[rings - 1];
+  for (let si = 0; si < segments; si++) {
+    const sn = (si + 1) % segments;
+    indices.push(outerTop[si], outerBot[si], outerBot[sn], outerTop[si], outerBot[sn], outerTop[sn]);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function lensFootprintFor(lensType, params, width, height) {
+  const type = LENS_TYPES[lensType];
+  if (type && type.footprint === 'circle') {
+    const rawDiameter = Number(params && params.diameter);
+    const diameter = Math.max(1, Math.min(Number.isFinite(rawDiameter) ? rawDiameter : Math.min(width, height), Math.min(width, height)));
+    return { kind: 'circle', radius: diameter * 0.5 };
+  }
+  return { kind: 'rect' };
+}
+
+function applyBoxBlurGrid(grid, nx, ny, radius) {
+  const r = Math.max(1, radius | 0);
+  const tmp = new Float32Array(nx * ny);
+  const prefix = new Float64Array(Math.max(nx, ny) + 1);
+
+  for (let i = 0; i < ny; i++) {
+    const row = i * nx;
+    prefix[0] = 0;
+    for (let j = 0; j < nx; j++) prefix[j + 1] = prefix[j] + grid[row + j];
+    for (let j = 0; j < nx; j++) {
+      const a = Math.max(0, j - r);
+      const b = Math.min(nx - 1, j + r);
+      tmp[row + j] = (prefix[b + 1] - prefix[a]) / (b - a + 1);
+    }
+  }
+
+  for (let j = 0; j < nx; j++) {
+    prefix[0] = 0;
+    for (let i = 0; i < ny; i++) prefix[i + 1] = prefix[i] + tmp[i * nx + j];
+    for (let i = 0; i < ny; i++) {
+      const a = Math.max(0, i - r);
+      const b = Math.min(ny - 1, i + r);
+      grid[i * nx + j] = (prefix[b + 1] - prefix[a]) / (b - a + 1);
+    }
+  }
+}
+
+function reapplyFlatEdgeToGrid(grid, nx, ny, width, height) {
+  const flat = Math.max(0, Number(state.flatEdgeWidth) || 0);
+  if (flat <= 0) return;
+  const halfW = width * 0.5;
+  const halfH = height * 0.5;
+  const blend = Math.min(6, Math.max(2, flat * 0.5));
+  for (let i = 0; i < ny; i++) {
+    const y = -halfH + (i / (ny - 1)) * height;
+    for (let j = 0; j < nx; j++) {
+      const x = -halfW + (j / (nx - 1)) * width;
+      const d = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+      if (d <= flat) grid[i * nx + j] = 0;
+      else grid[i * nx + j] *= smootherStep01((d - flat) / blend);
+    }
+  }
+}
+
+const STEP_SURFACE_PROFILES = {
+  compact:  { min: 51, max: 61, mult: 6.0 },
+  standard: { min: 61, max: 81, mult: 4.0 },
+  high:     { min: 91, max: 121, mult: 3.0 },
+};
+
+function stepSurfaceSamplesForState(width, height) {
+  const profile = STEP_SURFACE_PROFILES[state.stepExportQuality] || STEP_SURFACE_PROFILES.standard;
+  const res = Math.max(0.1, Number(state.resolution) || 1.0);
+  const targetSpacing = Math.max(2.0, res * profile.mult);
+  let samples = Math.floor(Math.max(width, height) / targetSpacing) + 1;
+  samples = Math.max(profile.min, Math.min(profile.max, samples));
+  if (samples % 2 === 0) samples += 1;
+  return samples;
+}
+
+function updateStepPreviewInfo(width = state.panelWidth, height = state.panelHeight) {
+  if (!state.stepSurfacePreview) {
+    state.stepPreviewInfo = 'off';
+    return;
+  }
+  const samples = stepSurfaceSamplesForState(width, height);
+  const label = state.stepExportQuality === 'high' ? 'high precision' : state.stepExportQuality;
+  state.stepPreviewInfo = `${label} · ${samples} x ${samples} control grid`;
+}
+
+function openUniformKnots(nCtrl, degree) {
+  const interior = nCtrl - degree - 1;
+  const knots = [];
+  for (let i = 0; i <= degree; i++) knots.push(0);
+  for (let i = 1; i <= interior; i++) knots.push(i / (interior + 1));
+  for (let i = 0; i <= degree; i++) knots.push(1);
+  return knots;
+}
+
+function bsplineBasisAt(t, nCtrl, degree, knots) {
+  const u = Math.min(1, Math.max(0, t));
+  if (u >= 1) {
+    const indices = [], weights = [];
+    for (let i = degree; i >= 0; i--) { indices.push(nCtrl - 1 - i); weights.push(i === 0 ? 1 : 0); }
+    return { indices, weights };
+  }
+
+  let span = degree;
+  const lastSpan = nCtrl - 1;
+  while (span < lastSpan && u >= knots[span + 1]) span++;
+
+  const N = new Array(degree + 1).fill(0);
+  const left = new Array(degree + 1).fill(0);
+  const right = new Array(degree + 1).fill(0);
+  N[0] = 1.0;
+  for (let j = 1; j <= degree; j++) {
+    left[j] = u - knots[span + 1 - j];
+    right[j] = knots[span + j] - u;
+    let saved = 0.0;
+    for (let r = 0; r < j; r++) {
+      const denom = right[r + 1] + left[j - r];
+      const temp = denom !== 0 ? N[r] / denom : 0;
+      N[r] = saved + right[r + 1] * temp;
+      saved = left[j - r] * temp;
+    }
+    N[j] = saved;
+  }
+
+  const indices = [];
+  for (let j = 0; j <= degree; j++) indices.push(span - degree + j);
+  return { indices, weights: N };
+}
+
+function applyStepSurfacePreview(grid, nx, ny, width, height) {
+  const degree = 3;
+  const samples = stepSurfaceSamplesForState(width, height);
+  if (samples < degree + 2) return;
+
+  const ctrl = new Float32Array(samples * samples);
+  for (let cy = 0; cy < samples; cy++) {
+    const gy = (cy / (samples - 1)) * (ny - 1);
+    const y0 = Math.max(0, Math.min(ny - 1, Math.floor(gy)));
+    const y1 = Math.min(ny - 1, y0 + 1);
+    const ty = gy - y0;
+    for (let cx = 0; cx < samples; cx++) {
+      const gx = (cx / (samples - 1)) * (nx - 1);
+      const x0 = Math.max(0, Math.min(nx - 1, Math.floor(gx)));
+      const x1 = Math.min(nx - 1, x0 + 1);
+      const tx = gx - x0;
+      const a = grid[y0 * nx + x0] * (1 - tx) + grid[y0 * nx + x1] * tx;
+      const b = grid[y1 * nx + x0] * (1 - tx) + grid[y1 * nx + x1] * tx;
+      ctrl[cy * samples + cx] = a * (1 - ty) + b * ty;
+    }
+  }
+
+  if (state.opticalCleanSurface && state.lensType === 'stepped_ripple') {
+    applyOpticalRadialCleanup(ctrl, samples, width, height);
+  }
+
+  // Match the fabricator STEP guardrail: the full flat edge band remains
+  // exactly planar even after the smooth surface preview is evaluated.
+  const flat = Math.max(0, Number(state.flatEdgeWidth) || 0);
+  const halfW = width * 0.5, halfH = height * 0.5;
+  for (let cy = 0; cy < samples; cy++) {
+    const y = -halfH + (cy / (samples - 1)) * height;
+    for (let cx = 0; cx < samples; cx++) {
+      const x = -halfW + (cx / (samples - 1)) * width;
+      const d = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+      if (cy === 0 || cy === samples - 1 || cx === 0 || cx === samples - 1 || d <= flat) {
+        ctrl[cy * samples + cx] = 0;
+      }
+    }
+  }
+
+  const knots = openUniformKnots(samples, degree);
+  const bx = Array.from({ length: nx }, (_, j) => bsplineBasisAt(j / (nx - 1), samples, degree, knots));
+  const by = Array.from({ length: ny }, (_, i) => bsplineBasisAt(i / (ny - 1), samples, degree, knots));
+  const out = new Float32Array(nx * ny);
+  for (let i = 0; i < ny; i++) {
+    const yBasis = by[i];
+    for (let j = 0; j < nx; j++) {
+      const xBasis = bx[j];
+      let z = 0;
+      for (let yy = 0; yy <= degree; yy++) {
+        const cy = yBasis.indices[yy];
+        const wy = yBasis.weights[yy];
+        if (cy < 0 || cy >= samples || wy === 0) continue;
+        for (let xx = 0; xx <= degree; xx++) {
+          const cx = xBasis.indices[xx];
+          const wx = xBasis.weights[xx];
+          if (cx < 0 || cx >= samples || wx === 0) continue;
+          z += ctrl[cy * samples + cx] * wx * wy;
+        }
+      }
+      out[i * nx + j] = z;
+    }
+  }
+
+  for (let i = 0; i < ny; i++) {
+    const y = -halfH + (i / (ny - 1)) * height;
+    for (let j = 0; j < nx; j++) {
+      const x = -halfW + (j / (nx - 1)) * width;
+      const d = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+      grid[i * nx + j] = (i === 0 || i === ny - 1 || j === 0 || j === nx - 1 || d <= flat) ? 0 : out[i * nx + j];
+    }
+  }
+}
+
+function applyOpticalRadialCleanup(values, samples, width, height) {
+  const halfW = width * 0.5;
+  const halfH = height * 0.5;
+  const flat = Math.max(0, Number(state.flatEdgeWidth) || 0);
+  const maxR = Math.hypot(halfW, halfH);
+  const bins = Math.max(64, samples * 2);
+  const sums = new Float64Array(bins);
+  const weights = new Float64Array(bins);
+
+  for (let i = 0; i < samples; i++) {
+    const y = -halfH + (i / (samples - 1)) * height;
+    for (let j = 0; j < samples; j++) {
+      const x = -halfW + (j / (samples - 1)) * width;
+      const d = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+      if (d <= flat) continue;
+      const r = Math.hypot(x, y);
+      const f = Math.min(bins - 1, Math.max(0, (r / maxR) * (bins - 1)));
+      const b0 = Math.floor(f);
+      const b1 = Math.min(bins - 1, b0 + 1);
+      const t = f - b0;
+      const z = values[i * samples + j];
+      sums[b0] += z * (1 - t); weights[b0] += (1 - t);
+      sums[b1] += z * t;       weights[b1] += t;
+    }
+  }
+
+  const profile = new Float64Array(bins);
+  let last = 0;
+  for (let b = 0; b < bins; b++) {
+    if (weights[b] > 0) {
+      last = sums[b] / weights[b];
+      profile[b] = last;
+    } else {
+      profile[b] = last;
+    }
+  }
+  for (let b = bins - 2; b >= 0; b--) {
+    if (weights[b] <= 0) profile[b] = profile[b + 1];
+  }
+
+  for (let pass = 0; pass < 3; pass++) {
+    const prev = profile.slice();
+    for (let b = 1; b < bins - 1; b++) {
+      profile[b] = prev[b - 1] * 0.2 + prev[b] * 0.6 + prev[b + 1] * 0.2;
+    }
+  }
+
+  for (let i = 0; i < samples; i++) {
+    const y = -halfH + (i / (samples - 1)) * height;
+    for (let j = 0; j < samples; j++) {
+      const x = -halfW + (j / (samples - 1)) * width;
+      const d = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+      if (d <= flat) {
+        values[i * samples + j] = 0;
+        continue;
+      }
+      const r = Math.hypot(x, y);
+      const f = Math.min(bins - 1, Math.max(0, (r / maxR) * (bins - 1)));
+      const b0 = Math.floor(f);
+      const b1 = Math.min(bins - 1, b0 + 1);
+      const t = f - b0;
+      values[i * samples + j] = profile[b0] * (1 - t) + profile[b1] * t;
+    }
+  }
 }
 
 // -------------------------------------------------------------------------
@@ -1911,17 +2596,13 @@ function applyStableLiveLensMaterial(on) {
 }
 
 // --- Shape-view material -----------------------------------------------------
-// Opaque matte "clay" with topographic colour ramp + contour lines for sense-
-// checking the lens form. Toggled via the floating 🗺 shape view button. Reads
-// like a topo map — gradient encodes height (cool=low, warm=high), thin dark
-// lines mark every Nmm of elevation, Lambert shading shows the silhouette
-// clearly. Used both for me sense-checking my own work and for sending to
-// fabricators alongside the STL so they can read the geometry at a glance.
+// Opaque smooth neutral "clay" with studio lighting for checking the actual
+// sculpted form. Optional styles add height colour, contour bands, or heatmap.
 const shapeViewMaterial = new THREE.ShaderMaterial({
   uniforms: {
     uLightDir:        { value: new THREE.Vector3(0.3, 0.6, 1.0).normalize() },
-    uContourInterval: { value: 5.0 },     // mm between contour lines
     uHeightRange:     { value: 100.0 },   // mm; colour ramp spans 0..uHeightRange
+    uTopoMode:        { value: 0.0 },
   },
   vertexShader: /* glsl */`
     varying vec3 vWorldPos;
@@ -1938,45 +2619,71 @@ const shapeViewMaterial = new THREE.ShaderMaterial({
     varying vec3 vWorldPos;
     varying vec3 vWorldNormal;
     uniform vec3 uLightDir;
-    uniform float uContourInterval;
     uniform float uHeightRange;
+    uniform float uTopoMode;
 
-    // Cool→warm 4-stop gradient. Reads as a topo map at a glance.
-    vec3 heightRamp(float t) {
+    vec3 topographicRamp(float t) {
       t = clamp(t, 0.0, 1.0);
-      vec3 c0 = vec3(0.07, 0.12, 0.30);   // deep blue (lowest)
-      vec3 c1 = vec3(0.18, 0.55, 0.65);   // teal
-      vec3 c2 = vec3(0.95, 0.75, 0.30);   // warm gold
-      vec3 c3 = vec3(1.00, 0.45, 0.20);   // orange (highest)
-      if (t < 0.33) return mix(c0, c1, t / 0.33);
-      if (t < 0.66) return mix(c1, c2, (t - 0.33) / 0.33);
-      return mix(c2, c3, (t - 0.66) / 0.34);
+      vec3 c0 = vec3(0.20, 0.32, 0.55);
+      vec3 c1 = vec3(0.34, 0.62, 0.70);
+      vec3 c2 = vec3(0.76, 0.76, 0.60);
+      if (t < 0.55) return mix(c0, c1, smoothstep(0.0, 0.55, t));
+      return mix(c1, c2, smoothstep(0.55, 1.0, t));
+    }
+
+    vec3 heatRamp(float t) {
+      t = clamp(t, 0.0, 1.0);
+      vec3 c0 = vec3(0.04, 0.07, 0.22); // deep low blue
+      vec3 c1 = vec3(0.00, 0.58, 0.78); // cyan
+      vec3 c2 = vec3(0.28, 0.86, 0.34); // green
+      vec3 c3 = vec3(1.00, 0.82, 0.12); // yellow
+      vec3 c4 = vec3(1.00, 0.22, 0.54); // hot pink
+      vec3 c5 = vec3(1.00, 0.96, 0.86); // bright peak
+      if (t < 0.22) return mix(c0, c1, smoothstep(0.00, 0.22, t));
+      if (t < 0.45) return mix(c1, c2, smoothstep(0.22, 0.45, t));
+      if (t < 0.68) return mix(c2, c3, smoothstep(0.45, 0.68, t));
+      if (t < 0.88) return mix(c3, c4, smoothstep(0.68, 0.88, t));
+      return mix(c4, c5, smoothstep(0.88, 1.00, t));
     }
 
     void main() {
       vec3 N = normalize(vWorldNormal);
       vec3 L = normalize(uLightDir);
-      // Lambert shading with a soft ambient floor so dark sides still read.
-      float diffuse = mix(0.35, 1.0, max(0.0, dot(N, L)));
-
-      // Height ramp colour
+      vec3 V = normalize(cameraPosition - vWorldPos);
       float h = max(0.0, vWorldPos.z);
-      vec3 base = heightRamp(h / uHeightRange);
+      float ht = h / uHeightRange;
+      vec3 clay = vec3(0.66, 0.67, 0.64);
+      vec3 topographic = topographicRamp(ht);
+      vec3 heatmap = heatRamp(ht);
+      vec3 base = clay;
+      if (uTopoMode > 1.5) base = heatmap;
+      else if (uTopoMode > 0.5) base = topographic;
 
-      // Contour lines: thin dark bands at every uContourInterval mm of elevation.
-      // Antialiased via fwidth on the height-derivative so lines stay clean at
-      // any zoom or grazing angle.
-      float bands = h / uContourInterval;
-      float aa = fwidth(bands);
-      float fr = abs(fract(bands) - 0.5);
-      float contour = smoothstep(aa, aa * 2.5, fr);
-      // Major lines every 5th contour, slightly stronger.
-      float bandsMaj = h / (uContourInterval * 5.0);
-      float aaMaj = fwidth(bandsMaj);
-      float frMaj = abs(fract(bandsMaj) - 0.5);
-      float major = smoothstep(aaMaj * 0.5, aaMaj * 2.0, frMaj);
+      float diffuse = mix(0.48, 1.08, max(0.0, dot(N, L)));
+      float fill = mix(0.78, 1.0, max(0.0, dot(N, vec3(-0.45, -0.25, 0.86))));
+      vec3 R = reflect(-L, N);
+      float spec = pow(max(0.0, dot(R, V)), 42.0) * 0.22;
+      float rim = pow(1.0 - clamp(abs(dot(N, V)), 0.0, 1.0), 2.0) * 0.24;
 
-      vec3 col = base * diffuse * (0.55 + contour * 0.45) * (0.7 + major * 0.3);
+      vec3 col = base * diffuse * fill + vec3(spec + rim);
+      if (uTopoMode > 0.5 && uTopoMode < 1.5) {
+        float bands = h / 5.0;
+        float aa = max(fwidth(bands), 0.001);
+        float fr = abs(fract(bands) - 0.5);
+        float contour = smoothstep(aa, aa * 2.5, fr);
+        float majorBands = h / 25.0;
+        float aaMajor = max(fwidth(majorBands), 0.001);
+        float majorFr = abs(fract(majorBands) - 0.5);
+        float major = smoothstep(aaMajor * 0.5, aaMajor * 2.0, majorFr);
+        col *= (0.60 + contour * 0.40) * (0.84 + major * 0.16);
+      }
+      if (uTopoMode > 1.5) {
+        float bands = h / 10.0;
+        float aa = max(fwidth(bands), 0.001);
+        float fr = abs(fract(bands) - 0.5);
+        float contour = 1.0 - smoothstep(aa * 0.8, aa * 2.8, fr);
+        col = mix(col, vec3(0.02, 0.025, 0.035), contour * 0.24);
+      }
       gl_FragColor = vec4(col, 1.0);
     }
   `,
@@ -1984,6 +2691,25 @@ const shapeViewMaterial = new THREE.ShaderMaterial({
 });
 
 let lensMesh = null, lensMeshB = null;
+const SHAPE_VIEW_DEFAULT_RESOLUTION_MM = 1.0;
+const SHAPE_VIEW_MIN_RESOLUTION_MM = 0.5;
+
+function activeLensResolution() {
+  if (!state?.shapeView) return state.resolution;
+  const inspect = Number.isFinite(state.shapeViewResolution)
+    ? state.shapeViewResolution
+    : SHAPE_VIEW_DEFAULT_RESOLUTION_MM;
+  return Math.max(SHAPE_VIEW_MIN_RESOLUTION_MM, inspect);
+}
+
+function syncShapeViewMaterial() {
+  const mode = state.shapeViewStyle === 'heatmap'
+    ? 2.0
+    : state.shapeViewStyle === 'topographic'
+      ? 1.0
+      : 0.0;
+  shapeViewMaterial.uniforms.uTopoMode.value = mode;
+}
 
 // -------------------------------------------------------------------------
 // State
@@ -1996,10 +2722,16 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   smoothing: 1,
   shapeScale: 1.0,        // scales lens height-fn input coords. <1 stretches features outward
                           // to fill the slab (less flat margin); >1 compresses inward.
+  flatEdgeWidth: 10,      // physical flat border around every lens type, in mm
+  stepExportQuality: 'standard',
+  stepSurfacePreview: true,
+  opticalCleanSurface: true,
+  stepPreviewInfo: 'standard · 81 x 81 control grid',
   params: {},
   ior: 1.49,
   dispersion: 0.0,
   thickness: 15,
+  distortionBoost: 0.0,
   roughness: 0.02,
   tint: '#ffffff',
   panelMode: 1,
@@ -2044,8 +2776,8 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   recLoop: false,
   renderFolderLabel: 'Downloads',
   backgroundRenderStatus: 'idle',
-  renderSmooth: '2× (clean)',
-  exportStability: 'extra clean (anti-glitch)',
+  renderSmooth: 'off (fast)',
+  exportStability: 'normal (faster)',
   motionBlurSamples: 1,           // 1 = off, 4/8 = N sub-frames per output frame averaged for cinematic motion blur
   superDispersion: false,         // export-time supersample of the transmission RT for sharper rainbow refraction
   watermarkText: '',
@@ -2074,10 +2806,15 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   lookGrain:      0.0,
   lookSharpen:    0.0,
   lookLutMix:     1.0,
+  lookLutPreset:  'none',
   lookLutName:    '',     // display only — name of currently loaded LUT
   showDimensions: false,  // dimension overlay hidden by default — toggle from Actions when needed
+  showSectionProfile: false, // live centre-line cross-section popout for checking the lens silhouette
   lensHidden: false,      // hide glass lens mesh (LED panel stays visible — useful for shader preview / glitch isolation)
   shapeView: false,       // matte topographic render of the lens form (instead of glass)
+  shapeViewStyle: 'smooth',
+  shapeViewResolution: SHAPE_VIEW_DEFAULT_RESOLUTION_MM, // mm mesh spacing used only for ShapeView inspection
+  shapeViewInfo: 'off',
   ecoModeFlag: false,     // mirror of ecoModeActive for GUI binding (auto-synced)
   fpsText: '— fps',       // live readout shown in Actions folder
   bloomStrength: 0.5,
@@ -2089,6 +2826,7 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   iorB: 1.49,
   dispersionB: 0.0,
   thicknessB: 30,
+  distortionBoostB: 0.0,
   roughnessB: 0.02,
   tintB: '#ffffff',
 }));
@@ -2193,6 +2931,27 @@ function withShapeScale(fn, scale) {
   return (x, y) => fn(x * s, y * s);
 }
 
+function withFlatEdge(fn, width, height, flatWidth = 0) {
+  const flat = Math.max(0, Number(flatWidth) || 0);
+  if (flat <= 0) return fn;
+  const halfW = width * 0.5;
+  const halfH = height * 0.5;
+  const blend = Math.min(6, Math.max(2, flat * 0.5));
+  return (x, y) => {
+    const d = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+    if (d <= flat) return 0;
+    const env = smootherStep01((d - flat) / blend);
+    return fn(x, y) * env;
+  };
+}
+
+function makeLensHeightFn(lensType, params, width, height) {
+  const type = LENS_TYPES[lensType];
+  const base = type.fn(params, width, height);
+  const shaped = withShapeScale(withMirror(base, state.mirrorLens), state.shapeScale);
+  return withFlatEdge(shaped, width, height, state.flatEdgeWidth);
+}
+
 // Recompute the dimension overlay panel from the current state. Walks the
 // lens height field at a coarse grid (4 mm step) to find peak height and
 // integrate volume, so the on-screen mass estimate matches reality. Cheap —
@@ -2204,8 +2963,7 @@ function updateDimensionOverlay() {
   if (!state.showDimensions) return;
   try {
     const W = state.panelWidth, H = state.panelHeight;
-    const type = LENS_TYPES[state.lensType];
-    const heightFn = withShapeScale(withMirror(type.fn(state.params, W, H), state.mirrorLens), state.shapeScale);
+    const heightFn = makeLensHeightFn(state.lensType, state.params, W, H);
     const step = 4.0;
     let maxZ = 0, volR = 0;
     const cell = step * step;
@@ -2219,7 +2977,9 @@ function updateDimensionOverlay() {
     const baseT = state.thickness;
     const totalH = baseT + maxZ;
     const volBase = W * H * baseT;
-    const massKg = ((volBase + volR) / 1e6) * 1.18 / 1000;
+    // Volume is mm^3. Divide by 1000 to get cm^3, multiply by PMMA density
+    // (1.18 g/cm^3), then divide by 1000 to get kg: equivalent to /1e6 * 1.18.
+    const massKg = ((volBase + volR) / 1e6) * 1.18;
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('dimFoot',   `${W} × ${H} mm`);
     set('dimBase',   `${baseT.toFixed(0)} mm`);
@@ -2230,11 +2990,155 @@ function updateDimensionOverlay() {
   } catch (_) { /* leave overlay stale on transient errors */ }
 }
 
+function updateSectionProfileOverlay() {
+  const panel = document.getElementById('sectionProfilePanel');
+  const canvas = document.getElementById('sectionProfileCanvas');
+  const info = document.getElementById('sectionProfileInfo');
+  if (!panel || !canvas) return;
+  panel.classList.toggle('on', !!state.showSectionProfile);
+  if (!state.showSectionProfile) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  const cssW = Math.max(360, Math.floor(rect.width || 620));
+  const cssH = Math.max(180, Math.floor(rect.height || 210));
+  if (canvas.width !== Math.floor(cssW * dpr) || canvas.height !== Math.floor(cssH * dpr)) {
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+  }
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const W = state.panelWidth;
+  const H = state.panelHeight;
+  const baseT = Number(state.thickness) || 0;
+  const heightFn = makeLensHeightFn(state.lensType, state.params, W, H);
+  const lensResolution = activeLensResolution();
+  const heightGrid = buildLensHeightGrid(heightFn, W, H, lensResolution, state.smoothing);
+  const samples = 300;
+  const profile = [];
+  let maxZ = 0;
+  for (let i = 0; i < samples; i++) {
+    const t = i / (samples - 1);
+    const x = -W * 0.5 + W * t;
+    const z = Math.max(0, sampleHeightGrid(heightGrid.grid, heightGrid.nx, heightGrid.ny, W, H, x, 0));
+    profile.push({ x, z });
+    if (z > maxZ) maxZ = z;
+  }
+
+  const padL = 42, padR = 20, padT = 18, padB = 38;
+  const plotW = cssW - padL - padR;
+  const plotH = cssH - padT - padB;
+  const totalDepth = Math.max(1, baseT + maxZ);
+  const yFor = (z) => padT + (1 - z / totalDepth) * plotH;
+  const xFor = (x) => padL + ((x + W * 0.5) / W) * plotW;
+  const rearY = yFor(0);
+  const baseY = yFor(baseT);
+
+  ctx.fillStyle = '#f6f4ef';
+  ctx.fillRect(0, 0, cssW, cssH);
+
+  // Soft grid.
+  ctx.strokeStyle = '#dedbd2';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (plotH * i) / 4;
+    ctx.moveTo(padL, y);
+    ctx.lineTo(cssW - padR, y);
+  }
+  ctx.stroke();
+
+  // Filled acrylic cross-section from rear face to sculpted front surface.
+  ctx.beginPath();
+  ctx.moveTo(xFor(-W * 0.5), rearY);
+  for (const p of profile) ctx.lineTo(xFor(p.x), yFor(baseT + p.z));
+  ctx.lineTo(xFor(W * 0.5), rearY);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(137, 218, 231, 0.34)';
+  ctx.fill();
+
+  // Rear flat face and base-thickness reference.
+  ctx.strokeStyle = '#6e737a';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(padL, rearY);
+  ctx.lineTo(cssW - padR, rearY);
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(110, 115, 122, 0.42)';
+  ctx.setLineDash([5, 5]);
+  ctx.beginPath();
+  ctx.moveTo(padL, baseY);
+  ctx.lineTo(cssW - padR, baseY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Sculpted front section line.
+  ctx.strokeStyle = '#0b6f83';
+  ctx.lineWidth = 3;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  profile.forEach((p, i) => {
+    const x = xFor(p.x);
+    const y = yFor(baseT + p.z);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Centre marker.
+  ctx.strokeStyle = 'rgba(220, 58, 160, 0.72)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 4]);
+  ctx.beginPath();
+  ctx.moveTo(xFor(0), padT);
+  ctx.lineTo(xFor(0), rearY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Labels.
+  ctx.fillStyle = '#25272d';
+  ctx.font = '600 10px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif';
+  ctx.fillText('front sculpted surface', padL + 4, padT + 12);
+  ctx.fillStyle = '#6b6f78';
+  ctx.font = '10px "SF Mono", ui-monospace, Menlo, monospace';
+  ctx.fillText('base thickness', padL + 4, baseY - 5);
+  ctx.fillText('rear flat face', padL + 4, rearY - 5);
+  ctx.fillText(`${W.toFixed(0)} mm`, cssW - padR - 52, cssH - 12);
+  ctx.fillText('centre', xFor(0) - 19, cssH - 12);
+  ctx.fillText(`${totalDepth.toFixed(1)} mm`, 4, padT + 4);
+  ctx.fillText('0', 18, rearY - 4);
+
+  if (info) {
+    const smoothLabel = Number(state.smoothing) > 0 ? ` · smooth ${Number(state.smoothing).toFixed(0)}mm` : '';
+    info.textContent = `${state.lensType.replace(/_/g, ' ')} · peak ${maxZ.toFixed(1)}mm · total ${totalDepth.toFixed(1)}mm${smoothLabel}`;
+  }
+}
+
+document.getElementById('sectionProfileClose')?.addEventListener('click', () => {
+  state.showSectionProfile = false;
+  updateSectionProfileOverlay();
+  guiRefresh();
+});
+
 function rebuildLenses() {
   if (lensMesh) { lensMesh.geometry.dispose(); scene.remove(lensMesh); }
+  const lensResolution = activeLensResolution();
   const typeA = LENS_TYPES[state.lensType];
-  const hA = withShapeScale(withMirror(typeA.fn(state.params, state.panelWidth, state.panelHeight), state.mirrorLens), state.shapeScale);
-  const geoA = makeLensGeometry(hA, state.panelWidth, state.panelHeight, state.resolution, state.thickness, state.smoothing);
+  updateStepPreviewInfo(state.panelWidth, state.panelHeight);
+  const hA = makeLensHeightFn(state.lensType, state.params, state.panelWidth, state.panelHeight);
+  const geoA = makeLensGeometryForFootprint(
+    hA,
+    state.panelWidth,
+    state.panelHeight,
+    lensResolution,
+    state.thickness,
+    state.smoothing,
+    lensFootprintFor(state.lensType, state.params, state.panelWidth, state.panelHeight)
+  );
   lensMesh = new THREE.Mesh(geoA, lensMaterial);
   scene.add(lensMesh);
 
@@ -2255,8 +3159,16 @@ function rebuildLenses() {
 
     if (lensMeshB) { lensMeshB.geometry.dispose(); scene.remove(lensMeshB); }
     const typeB = LENS_TYPES[state.lensTypeB];
-    const hB = withShapeScale(withMirror(typeB.fn(state.paramsB, state.panelWidth, state.panelHeight), state.mirrorLens), state.shapeScale);
-    const geoB = makeLensGeometry(hB, state.panelWidth, state.panelHeight, state.resolution, state.thicknessB, state.smoothing);
+    const hB = makeLensHeightFn(state.lensTypeB, state.paramsB, state.panelWidth, state.panelHeight);
+    const geoB = makeLensGeometryForFootprint(
+      hB,
+      state.panelWidth,
+      state.panelHeight,
+      lensResolution,
+      state.thicknessB,
+      state.smoothing,
+      lensFootprintFor(state.lensTypeB, state.paramsB, state.panelWidth, state.panelHeight)
+    );
     lensMeshB = new THREE.Mesh(geoB, lensMaterialB);
     lensMeshB.position.set(offsetX, 0, 0);
     scene.add(lensMeshB);
@@ -2270,7 +3182,11 @@ function rebuildLenses() {
     ledCasingB.geometry.dispose();
     ledCasingB.geometry = new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
 
-    setStatus(`A: ${typeA.label}  ·  B: ${typeB.label}  ·  ${state.panelWidth}×${state.panelHeight} mm each`);
+    const shapeNote = state.shapeView ? ` · ShapeView ${lensResolution.toFixed(2)}mm` : '';
+    state.shapeViewInfo = state.shapeView
+      ? `${lensResolution.toFixed(2)}mm · ${(geoA.attributes.position.count + geoB.attributes.position.count).toLocaleString()} verts`
+      : 'off';
+    setStatus(`A: ${typeA.label}  ·  B: ${typeB.label}  ·  ${state.panelWidth}×${state.panelHeight} mm each${shapeNote}`);
   } else {
     lensMesh.position.set(0, 0, 0);
     ledPanel.position.set(0, 0, ledZA);
@@ -2282,14 +3198,19 @@ function rebuildLenses() {
     if (lensMeshB) { scene.remove(lensMeshB); lensMeshB.geometry.dispose(); lensMeshB = null; }
     ledPanelB.visible = false;
     ledCasingB.visible = false;
-    setStatus(`${typeA.label}  ·  ${state.panelWidth}×${state.panelHeight} mm  ·  ${(geoA.attributes.position.count).toLocaleString()} verts`);
+    const shapeNote = state.shapeView ? ` · ShapeView ${lensResolution.toFixed(2)}mm` : '';
+    state.shapeViewInfo = state.shapeView
+      ? `${lensResolution.toFixed(2)}mm · ${geoA.attributes.position.count.toLocaleString()} verts`
+      : 'off';
+    setStatus(`${typeA.label}  ·  ${state.panelWidth}×${state.panelHeight} mm  ·  ${(geoA.attributes.position.count).toLocaleString()} verts${shapeNote}`);
   }
   syncBackdropZ();
   updateDimensionOverlay();
+  updateSectionProfileOverlay();
   // Re-apply shape view if it was active — the rebuild just gave us a fresh
   // mesh with the regular glass material, so the topo render needs to be
   // re-bound to the new mesh.
-  if (state.shapeView   && typeof applyShapeView   === 'function') applyShapeView(true);
+  if (state.shapeView   && typeof applyShapeView   === 'function') applyShapeView(true, { skipRebuild: true });
   if (state.lensHidden  && typeof applyLensHidden  === 'function') applyLensHidden(true);
 }
 
@@ -2498,6 +3419,103 @@ function applyBundle(key) {
 // -------------------------------------------------------------------------
 const BUNDLED_PRESETS = {"1":{"lensType":"morph_rings","panelWidth":500,"panelHeight":500,"resolution":0.5,"smoothing":16,"shapeScale":0.86,"params":{"wavelength":35,"amplitude":35,"morph_period":5,"bias":0.38,"phase_shift":0.19},"ior":1.49,"dispersion":14.7,"thickness":20,"roughness":0,"tint":"#ffffff","panelMode":21,"panelScale":54,"panelSpeed":0.5,"panelBrightness":3.6,"panelHue":0.51,"panelDistance":10,"pgLineWidth":0.365,"pgFlow":-0.14,"patSharp":1,"patScale":0.37,"patDetail":0.5,"patDistort":0,"patSeed":0,"patAxis":0,"mirrorPanel":true,"mirrorLens":false,"sqThickness":0.5,"sqSoftness":0.3,"sqMono":false,"sqReverse":false,"sqHueSpread":2.5,"sqGradient":false,"sqGradA":"#ff2e88","sqGradB":"#00e0ff","sqGradC":"#ffd34d","sqGradAxis":0,"sqGradScale":1,"sqGradFlow":0.15,"bgColor":"#050505","bloomEnabled":false,"bloomStrength":0.5,"bloomRadius":0.7,"bloomThreshold":0.82,"lensSpin":0,"lookSaturation":1,"lookContrast":1,"lookVignette":0,"lookGrain":0,"lookSharpen":0,"lookLutMix":1,"compare":false,"lensTypeB":"organic_bulbs","paramsB":{"n_bulbs":24,"seed":7,"min_r":30,"max_r":75,"min_h":8,"max_h":22},"iorB":1.49,"dispersionB":0,"thicknessB":30,"roughnessB":0.02,"tintB":"#ffffff"},"2":{"lensType":"morph_rings","panelWidth":500,"panelHeight":500,"resolution":0.5,"smoothing":16,"shapeScale":0.88,"params":{"wavelength":39,"amplitude":28.5,"morph_period":4,"bias":0.46,"phase_shift":0.24},"ior":1.49,"dispersion":14.7,"thickness":20,"roughness":0,"tint":"#ffffff","panelMode":20,"panelScale":54,"panelSpeed":0.5,"panelBrightness":3.6,"panelHue":0.51,"panelDistance":10,"pgLineWidth":0.365,"pgFlow":-0.14,"mirrorPanel":true,"mirrorLens":true,"sqThickness":0.5,"sqSoftness":0.3,"sqMono":false,"sqReverse":false,"sqHueSpread":2.5,"sqGradient":false,"sqGradA":"#ff2e88","sqGradB":"#00e0ff","sqGradC":"#ffd34d","sqGradAxis":0,"sqGradScale":1,"sqGradFlow":0.15,"bgColor":"#050505","bloomEnabled":false,"bloomStrength":0.5,"bloomRadius":0.7,"bloomThreshold":0.82,"lensSpin":0,"lookSaturation":1,"lookContrast":1,"lookVignette":0,"lookGrain":0,"lookSharpen":0,"lookLutMix":1,"compare":false,"lensTypeB":"organic_bulbs","paramsB":{"n_bulbs":24,"seed":7,"min_r":30,"max_r":75,"min_h":8,"max_h":22},"iorB":1.49,"dispersionB":0,"thicknessB":30,"roughnessB":0.02,"tintB":"#ffffff"},"3":{"lensType":"morph_rings","panelWidth":500,"panelHeight":500,"resolution":0.5,"smoothing":18,"shapeScale":0.86,"params":{"wavelength":35,"amplitude":35,"morph_period":5,"bias":0.38,"phase_shift":0.19},"ior":1.49,"dispersion":14.7,"thickness":20,"roughness":0,"tint":"#ffffff","panelMode":4,"panelScale":146,"panelSpeed":0.1,"panelBrightness":2.2,"panelHue":0.15,"panelDistance":10,"pgLineWidth":0.345,"pgFlow":0.1,"patSharp":1,"patScale":3.79,"patDetail":1,"patDistort":0,"patSeed":72.60246218146868,"patAxis":2,"panelContrast":1.12,"mirrorPanel":true,"mirrorLens":true,"sqThickness":0.5,"sqSoftness":0.3,"sqMono":false,"sqReverse":false,"sqHueSpread":2.5,"sqGradient":false,"sqGradA":"#ff2e88","sqGradB":"#00e0ff","sqGradC":"#ffd34d","sqGradAxis":0,"sqGradScale":1,"sqGradFlow":0.15,"bgColor":"#050505","bloomEnabled":false,"bloomStrength":0.5,"bloomRadius":0.7,"bloomThreshold":0.82,"lensSpin":0,"lookSaturation":1,"lookContrast":1,"lookVignette":0,"lookGrain":0,"lookSharpen":0,"lookLutMix":1,"compare":false,"lensTypeB":"organic_bulbs","paramsB":{"n_bulbs":24,"seed":7,"min_r":30,"max_r":75,"min_h":8,"max_h":22},"iorB":1.49,"dispersionB":0,"thicknessB":30,"roughnessB":0.02,"tintB":"#ffffff"},"4":{"lensType":"morph_rings","panelWidth":500,"panelHeight":500,"resolution":0.5,"smoothing":2,"params":{"wavelength":40,"amplitude":33,"morph_period":2,"bias":0.84,"phase_shift":0.33},"ior":1.49,"dispersion":14.7,"thickness":100,"roughness":0,"tint":"#ffffff","panelMode":1,"panelScale":54,"panelSpeed":0.5,"panelBrightness":3.6,"panelHue":0.51,"panelDistance":18,"pgLineWidth":0.365,"pgFlow":-0.14,"sqThickness":0.5,"sqSoftness":0.3,"sqMono":false,"sqReverse":false,"sqHueSpread":2.5,"sqGradient":false,"sqGradA":"#ff2e88","sqGradB":"#00e0ff","sqGradC":"#ffd34d","sqGradAxis":0,"sqGradScale":1,"sqGradFlow":0.15,"bgColor":"#050505","bloomEnabled":false,"bloomStrength":0.5,"bloomRadius":0.7,"bloomThreshold":0.82,"lensSpin":0,"compare":false,"lensTypeB":"organic_bulbs","paramsB":{"n_bulbs":24,"seed":7,"min_r":30,"max_r":75,"min_h":8,"max_h":22},"iorB":1.49,"dispersionB":0,"thicknessB":30,"roughnessB":0.02,"tintB":"#ffffff"},"5":{"lensType":"morph_rings","panelWidth":500,"panelHeight":500,"resolution":0.5,"smoothing":2,"params":{"wavelength":40,"amplitude":33,"morph_period":2,"bias":0.84,"phase_shift":0.33},"ior":1.49,"dispersion":14.7,"thickness":25,"roughness":0,"tint":"#ffffff","panelMode":13,"panelScale":200,"panelSpeed":0.15,"panelBrightness":1.75,"panelHue":0.09,"panelDistance":21.5,"pgLineWidth":0.12,"pgFlow":-2.26,"sqThickness":0.5,"sqSoftness":0.3,"sqMono":false,"sqReverse":false,"sqHueSpread":2.5,"sqGradient":false,"sqGradA":"#ff2e88","sqGradB":"#00e0ff","sqGradC":"#ffd34d","sqGradAxis":0,"sqGradScale":1,"sqGradFlow":0.15,"bgColor":"#050505","bloomEnabled":false,"bloomStrength":0.5,"bloomRadius":0.7,"bloomThreshold":0.82,"lensSpin":0,"compare":false,"lensTypeB":"organic_bulbs","paramsB":{"n_bulbs":24,"seed":7,"min_r":30,"max_r":75,"min_h":8,"max_h":22},"iorB":1.49,"dispersionB":0,"thicknessB":30,"roughnessB":0.02,"tintB":"#ffffff"},"6":{"lensType":"morph_rings","panelWidth":500,"panelHeight":500,"resolution":1.5,"smoothing":1,"params":{"wavelength":24,"amplitude":25,"morph_period":3,"bias":0.28,"phase_shift":0},"ior":1.5,"dispersion":0,"thickness":22,"roughness":0,"tint":"#ffffff","panelMode":1,"panelScale":54,"panelSpeed":0.5,"panelBrightness":3.6,"panelHue":0.51,"panelDistance":18,"pgLineWidth":0.365,"pgFlow":-0.14,"sqThickness":0.5,"sqSoftness":0.3,"sqMono":false,"sqReverse":false,"sqHueSpread":2.5,"sqGradient":false,"sqGradA":"#ff2e88","sqGradB":"#00e0ff","sqGradC":"#ffd34d","sqGradAxis":0,"sqGradScale":1,"sqGradFlow":0.15,"bgColor":"#050505","bloomEnabled":false,"bloomStrength":0.5,"bloomRadius":0.7,"bloomThreshold":0.82,"lensSpin":0,"compare":false,"lensTypeB":"organic_bulbs","paramsB":{"n_bulbs":24,"seed":7,"min_r":30,"max_r":75,"min_h":8,"max_h":22},"iorB":1.49,"dispersionB":0,"thicknessB":30,"roughnessB":0.02,"tintB":"#ffffff"}};
 
+const GRAVITATIONAL_WAVE_PRESETS = {
+  'gw subtle spacetime': {
+    lensType: 'gravitational_wave', panelWidth: 500, panelHeight: 500, resolution: 0.75,
+    smoothing: 8, shapeScale: 1, flatEdgeWidth: 10, stepExportQuality: 'standard',
+    stepSurfacePreview: true, opticalCleanSurface: true,
+    params: {
+      wavelength: 72, amplitude: 18, source_separation: 95, source_balance: 0.5,
+      interference_strength: 0.38, spiral_twist: 1.15, chirp: 0.16, ellipticity: 1.08,
+      falloff: 0.38, ripple_profile: 'perfect_s_curve', ripple_curvature: 1.35,
+      edge_taper_width: 92, center_bulge_height: 8, center_bulge_radius: 165,
+      center_bulge_curve: 1.15, center_bulge_shoulder: 0.55, orbit_angle: -12,
+    },
+    ior: 1.49, dispersion: 4.2, thickness: 22, distortionBoost: 0.75, roughness: 0, tint: '#ffffff',
+    panelMode: 20, panelScale: 74, panelSpeed: 0.06, panelBrightness: 2.9, panelContrast: 1.15,
+    panelHue: 0.62, panelSat: 1.15, panelDistance: 18, pgLineWidth: 0.22, pgFlow: -0.06,
+    mirrorPanel: true, mirrorLens: false, bgColor: '#050505', bloomEnabled: false,
+    lookSaturation: 1, lookContrast: 1, lookVignette: 0, lookGrain: 0, lookSharpen: 0, lookLutMix: 1,
+    compare: false,
+  },
+  'gw binary merger': {
+    lensType: 'gravitational_wave', panelWidth: 500, panelHeight: 500, resolution: 0.75,
+    smoothing: 10, shapeScale: 0.92, flatEdgeWidth: 10, stepExportQuality: 'standard',
+    stepSurfacePreview: true, opticalCleanSurface: true,
+    params: {
+      wavelength: 48, amplitude: 34, source_separation: 145, source_balance: 0.58,
+      interference_strength: 0.82, spiral_twist: 3.4, chirp: 0.58, ellipticity: 0.86,
+      falloff: 0.22, ripple_profile: 'continuous_s_ripple', ripple_curvature: 1.45,
+      edge_taper_width: 72, center_bulge_height: 18, center_bulge_radius: 125,
+      center_bulge_curve: 1.35, center_bulge_shoulder: 0.4, orbit_angle: 28,
+    },
+    ior: 1.49, dispersion: 9.5, thickness: 24, distortionBoost: 1.1, roughness: 0, tint: '#ffffff',
+    panelMode: 14, panelScale: 2.6, panelSpeed: 0.1, panelBrightness: 3.1, panelContrast: 1.2,
+    panelHue: 0.48, panelSat: 1.25, panelDistance: 18, pgLineWidth: 0.28, pgFlow: -0.08,
+    patSharp: 0.62, patScale: 2.2, patDetail: 0.9, patDistort: 0.62,
+    mirrorPanel: true, mirrorLens: false, bgColor: '#040405', bloomEnabled: false,
+    lookSaturation: 1.05, lookContrast: 1.08, lookVignette: 0.06, lookGrain: 0, lookSharpen: 0, lookLutMix: 1,
+    compare: false,
+  },
+  'gw deep gravitational well': {
+    lensType: 'gravitational_wave', panelWidth: 500, panelHeight: 500, resolution: 0.75,
+    smoothing: 14, shapeScale: 0.86, flatEdgeWidth: 10, stepExportQuality: 'standard',
+    stepSurfacePreview: true, opticalCleanSurface: true,
+    params: {
+      wavelength: 38, amplitude: 44, source_separation: 72, source_balance: 0.5,
+      interference_strength: 0.72, spiral_twist: 5.2, chirp: 0.92, ellipticity: 1.28,
+      falloff: 0.46, ripple_profile: 'continuous_s_ripple', ripple_curvature: 1.8,
+      edge_taper_width: 105, center_bulge_height: 34, center_bulge_radius: 155,
+      center_bulge_curve: 1.6, center_bulge_shoulder: 0.74, orbit_angle: -36,
+    },
+    ior: 1.49, dispersion: 12.0, thickness: 20, distortionBoost: 1.45, roughness: 0, tint: '#ffffff',
+    panelMode: 11, panelScale: 96, panelSpeed: 0.08, panelBrightness: 3.25, panelContrast: 1.25,
+    panelHue: 0.56, panelSat: 1.2, panelDistance: 16, pgLineWidth: 0.2, pgFlow: -0.04,
+    mirrorPanel: true, mirrorLens: false, bgColor: '#030304', bloomEnabled: false,
+    lookSaturation: 1.08, lookContrast: 1.1, lookVignette: 0.08, lookGrain: 0, lookSharpen: 0, lookLutMix: 1,
+    compare: false,
+  },
+};
+
+const LOW_PROFILE_RIPPLE_PRESETS = {
+  'round sine ripple': {
+    lensType: 'round_sine_lens', panelWidth: 500, panelHeight: 500, resolution: 0.75,
+    smoothing: 0, shapeScale: 1, flatEdgeWidth: 0, stepExportQuality: 'standard',
+    stepSurfacePreview: true, opticalCleanSurface: true, shapeViewStyle: 'smooth',
+    params: {
+      diameter: 500, wavelength: 70, amplitude: 14, visible_rings: 4,
+      outer_fade_width: 18, edge_taper_width: 50, ripple_phase: 0,
+    },
+    ior: 1.49, dispersion: 4.0, thickness: 10, distortionBoost: 1.0, roughness: 0, tint: '#ffffff',
+    panelMode: 21, panelScale: 54, panelSpeed: 0.5, panelBrightness: 3.2, panelContrast: 1.0,
+    panelHue: 0.51, panelSat: 1.0, panelDistance: 10, pgLineWidth: 0.365, pgFlow: -0.14,
+    mirrorPanel: true, mirrorLens: false, bgColor: '#050505', bloomEnabled: false,
+    lookSaturation: 1, lookContrast: 1, lookVignette: 0, lookGrain: 0, lookSharpen: 0, lookLutMix: 1,
+    compare: false,
+  },
+  'thin sine ripple': {
+    lensType: 'sine_wave_lens', panelWidth: 500, panelHeight: 500, resolution: 0.75,
+    smoothing: 0, shapeScale: 1, flatEdgeWidth: 10, stepExportQuality: 'standard',
+    stepSurfacePreview: true, opticalCleanSurface: true, shapeViewStyle: 'smooth',
+    params: {
+      wavelength: 70, amplitude: 14, visible_rings: 4,
+      outer_fade_width: 18, edge_taper_width: 50, ripple_phase: 0,
+    },
+    ior: 1.49, dispersion: 4.0, thickness: 10, distortionBoost: 1.0, roughness: 0, tint: '#ffffff',
+    panelMode: 21, panelScale: 54, panelSpeed: 0.5, panelBrightness: 3.2, panelContrast: 1.0,
+    panelHue: 0.51, panelSat: 1.0, panelDistance: 10, pgLineWidth: 0.365, pgFlow: -0.14,
+    mirrorPanel: true, mirrorLens: false, bgColor: '#050505', bloomEnabled: false,
+    lookSaturation: 1, lookContrast: 1, lookVignette: 0, lookGrain: 0, lookSharpen: 0, lookLutMix: 1,
+    compare: false,
+  },
+};
+
+const AUTO_ADDED_PRESETS = { ...GRAVITATIONAL_WAVE_PRESETS, ...LOW_PROFILE_RIPPLE_PRESETS };
+
+function bundledPresetSeed() {
+  return JSON.parse(JSON.stringify({ ...BUNDLED_PRESETS, ...AUTO_ADDED_PRESETS }));
+}
+
 // Presets
 // -------------------------------------------------------------------------
 const PRESET_KEY = 'prismatica.presets.v2';
@@ -2506,10 +3524,33 @@ function loadPresets() {
     const stored = localStorage.getItem(PRESET_KEY);
     if (!stored || stored === '{}') {
       // First visit — seed with bundled presets
-      localStorage.setItem(PRESET_KEY, JSON.stringify(BUNDLED_PRESETS));
-      return JSON.parse(JSON.stringify(BUNDLED_PRESETS));
+      const seeded = bundledPresetSeed();
+      localStorage.setItem(PRESET_KEY, JSON.stringify(seeded));
+      return seeded;
     }
-    return JSON.parse(stored) || {};
+    const presets = JSON.parse(stored) || {};
+    let changed = false;
+    for (const [name, preset] of Object.entries(AUTO_ADDED_PRESETS)) {
+      if (!(name in presets)) {
+        presets[name] = JSON.parse(JSON.stringify(preset));
+        changed = true;
+      }
+    }
+    if (presets['thin sine ripple']?.params?.edge_taper_width === 24) {
+      presets['thin sine ripple'].params.edge_taper_width = 50;
+      changed = true;
+    }
+    if (presets['thin sine ripple'] && presets['thin sine ripple'].lensType !== 'sine_wave_lens') {
+      presets['thin sine ripple'] = JSON.parse(JSON.stringify(LOW_PROFILE_RIPPLE_PRESETS['thin sine ripple']));
+      changed = true;
+    }
+    if (presets['thin sine stepped ripple']?.lensType === 'stepped_ripple' &&
+        presets['thin sine stepped ripple']?.params?.flat_sine_blend === 1) {
+      delete presets['thin sine stepped ripple'];
+      changed = true;
+    }
+    if (changed) localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+    return presets;
   }
   catch { return {}; }
 }
@@ -2517,16 +3558,16 @@ function savePresets(obj) { localStorage.setItem(PRESET_KEY, JSON.stringify(obj)
 function presetSnapshot() {
   const s = {};
   for (const k of [
-    'lensType','panelWidth','panelHeight','resolution','smoothing','shapeScale','params',
-    'ior','dispersion','thickness','roughness','tint',
+    'lensType','panelWidth','panelHeight','resolution','smoothing','shapeScale','flatEdgeWidth','stepExportQuality','stepSurfacePreview','opticalCleanSurface','shapeViewStyle','shapeViewResolution','params',
+    'ior','dispersion','thickness','distortionBoost','roughness','tint',
     'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelSat','panelDistance','pgLineWidth','pgFlow',
     'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
     'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
     'sqGradient','sqGradA','sqGradB','sqGradC','sqGradAxis','sqGradScale','sqGradFlow',
     'bgColor','wallMaterial','wallBrightness','wallScale','envPreset','envIntensity',
     'bloomEnabled','bloomStrength','bloomRadius','bloomThreshold','lensSpin',
-    'lookSaturation','lookContrast','lookVignette','lookGrain','lookSharpen','lookLutMix',
-    'compare','lensTypeB','paramsB','iorB','dispersionB','thicknessB','roughnessB','tintB',
+    'lookSaturation','lookContrast','lookVignette','lookGrain','lookSharpen','lookLutMix','lookLutPreset',
+    'compare','lensTypeB','paramsB','iorB','dispersionB','thicknessB','distortionBoostB','roughnessB','tintB',
   ]) s[k] = JSON.parse(JSON.stringify(state[k]));
   return s;
 }
@@ -2536,15 +3577,38 @@ function renderStateSnapshot() {
   // dedicated render process needs them to reproduce the user's exact setup.
   for (const k of [
     'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','exportStability','motionBlurSamples','superDispersion','panelSmooth','watermarkText',
-    'autoOrbit','orbitSpeed','orbitArc',
-    'autoZoom','zoomAmount','zoomSpeed',
-    'autoPan','panAmount','panSpeed',
     'lensSpin',
   ]) snap[k] = JSON.parse(JSON.stringify(state[k]));
+  forceStableExportSettings(snap);
+  forceStillCameraState(snap);
   return snap;
+}
+function forceStableExportSettings(target = state) {
+  target.renderSmooth = 'off (fast)';
+  target.exportStability = 'normal (faster)';
+  target.motionBlurSamples = 1;
+  target.superDispersion = false;
+}
+function forceStillCameraState(target = state) {
+  target.autoOrbit = false;
+  target.autoZoom = false;
+  target.autoPan = false;
+  orbitHomeAzimuth = null;
+  orbitHomeElevation = null;
+  orbitPhase = 0;
+  zoomBaseDist = null;
+  zoomPhase = 0;
+  panPhase = 0;
+  if (typeof updateCameraMotion !== 'undefined' && updateCameraMotion._lastPanDy) {
+    camera.position.y -= updateCameraMotion._lastPanDy;
+    updateCameraMotion._lastPanDy = 0;
+  }
 }
 function applyPreset(p) {
   for (const k in p) state[k] = JSON.parse(JSON.stringify(p[k]));
+  // Legacy presets/defaults may contain old automatic camera motion. Ignore it:
+  // the live view should remain locked unless a shot sequence is being previewed.
+  forceStillCameraState();
   // Migrate older presets that predate these fields to the current defaults.
   if (!('smoothing' in p)) state.smoothing = 1;
   if (!('resolution' in p) || state.resolution > 2.5) state.resolution = 1.0;
@@ -2561,6 +3625,18 @@ function applyPreset(p) {
   if (!('panelContrast' in p)) state.panelContrast = 1.0;
   if (!('panelSat'      in p)) state.panelSat      = 1.0;
   if (!('shapeScale' in p)) state.shapeScale = 1.0;
+  if (!('flatEdgeWidth' in p)) state.flatEdgeWidth = 10;
+  state.flatEdgeWidth = Math.max(0, Math.min(80, Number(state.flatEdgeWidth) || 0));
+  if (!('stepExportQuality' in p)) state.stepExportQuality = 'standard';
+  if (!['compact','standard','high'].includes(state.stepExportQuality)) state.stepExportQuality = 'standard';
+  if (!('stepSurfacePreview' in p)) state.stepSurfacePreview = true;
+  if (!('opticalCleanSurface' in p)) state.opticalCleanSurface = true;
+  if (!('shapeViewStyle' in p)) state.shapeViewStyle = 'smooth';
+  if (!['smooth','topographic','heatmap'].includes(state.shapeViewStyle)) state.shapeViewStyle = 'smooth';
+  if (!('shapeViewResolution' in p)) state.shapeViewResolution = SHAPE_VIEW_DEFAULT_RESOLUTION_MM;
+  state.shapeViewResolution = Math.max(0.5, Math.min(4.0, Number(state.shapeViewResolution) || SHAPE_VIEW_DEFAULT_RESOLUTION_MM));
+  if (!('distortionBoost' in p)) state.distortionBoost = 0.0;
+  if (!('distortionBoostB' in p)) state.distortionBoostB = 0.0;
   if (!('mirrorLens' in p)) state.mirrorLens = true;
   if (!('mirrorPanel' in p)) state.mirrorPanel = true;
   if (!('envPreset' in p))    state.envPreset    = 'gallery';
@@ -2573,6 +3649,8 @@ function applyPreset(p) {
   if (!('lookGrain' in p))      state.lookGrain      = 0.0;
   if (!('lookSharpen' in p))    state.lookSharpen    = 0.0;
   if (!('lookLutMix' in p))     state.lookLutMix     = 1.0;
+  if (!('lookLutPreset' in p))  state.lookLutPreset  = 'none';
+  if (state.lookLutPreset === 'custom') state.lookLutPreset = 'none';
   // Backfill any per-lens-type params that didn't exist when this preset was saved.
   // Without this, buildParamFolders crashes if the lens added new params after the
   // preset was last saved (e.g. ripple_field gained a `step` param).
@@ -2582,6 +3660,9 @@ function applyPreset(p) {
     for (const k in defs) {
       if (!(k in paramsObj)) {
         paramsObj[k] = defs[k].value;
+      } else if (defs[k].options) {
+        const allowed = new Set(Object.values(defs[k].options));
+        if (!allowed.has(paramsObj[k])) paramsObj[k] = defs[k].value;
       } else if (typeof defs[k].min === 'number' && typeof defs[k].max === 'number' &&
                  typeof paramsObj[k] === 'number' &&
                  (paramsObj[k] < defs[k].min || paramsObj[k] > defs[k].max)) {
@@ -2594,10 +3675,19 @@ function applyPreset(p) {
   };
   fillMissingParams(state.lensType, state.params);
   fillMissingParams(state.lensTypeB, state.paramsB);
+  applyBuiltInLutPreset(state.lookLutPreset, { silent: true });
   syncMaterials();
   syncShader();
   syncScene();
+  // Dedicated/background renders restore the current app state by calling
+  // applyPreset() inside a fresh hidden Chrome tab. Wall material and gallery
+  // lighting are scene resources rather than shader uniforms, so they must be
+  // rebuilt here too or exports fall back to a flat/default wall and lighting.
+  buildEnv();
+  applyWallMaterial(state.wallMaterial || 'none');
   syncBloom();
+  syncLook();
+  syncShapeViewMaterial();
   buildParamFolders();
   rebuildLenses();
   guiRefresh();
@@ -2617,12 +3707,10 @@ function saveAsDefaults() {
   // Also capture Capture / scene fields that aren't in the standard preset snapshot.
   for (const k of [
     'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','exportStability','motionBlurSamples','superDispersion','panelSmooth','watermarkText',
-    'autoOrbit','orbitSpeed','orbitArc',
-    'autoZoom','zoomAmount','zoomSpeed',
-    'autoPan','panAmount','panSpeed',
     'lensSpin','bgColor',
     'bloomEnabled','bloomStrength','bloomRadius','bloomThreshold',
   ]) snap[k] = JSON.parse(JSON.stringify(state[k]));
+  forceStillCameraState(snap);
   try {
     localStorage.setItem(DEFAULTS_KEY, JSON.stringify(snap));
     setStatus('saved current settings as defaults');
@@ -2644,9 +3732,6 @@ function snapSpeedsToLoop() {
     return cycles / d;
   };
   const parts = [];
-  if (state.autoOrbit && state.orbitSpeed) { const v = snap(state.orbitSpeed); parts.push(`orbit ${state.orbitSpeed.toFixed(3)}→${v.toFixed(3)}`); state.orbitSpeed = v; }
-  if (state.autoZoom  && state.zoomSpeed)  { const v = snap(state.zoomSpeed);  parts.push(`zoom ${state.zoomSpeed.toFixed(3)}→${v.toFixed(3)}`);  state.zoomSpeed  = v; }
-  if (state.autoPan   && state.panSpeed)   { const v = snap(state.panSpeed);   parts.push(`pan ${state.panSpeed.toFixed(3)}→${v.toFixed(3)}`);   state.panSpeed   = v; }
   if (state.lensSpin) {
     const rots = Math.max(1, Math.round(Math.abs(state.lensSpin) * d / 360));
     const sign = state.lensSpin < 0 ? -1 : 1;
@@ -2655,7 +3740,7 @@ function snapSpeedsToLoop() {
     state.lensSpin = v;
   }
   guiRefresh();
-  setStatus(parts.length ? `snapped for ${d}s loop: ${parts.join(' · ')}` : `nothing to snap — enable orbit/zoom/pan/spin first`);
+  setStatus(parts.length ? `snapped for ${d}s loop: ${parts.join(' · ')}` : `nothing to snap — enable lens spin first`);
 }
 function savePresetPrompt() {
   const name = prompt('Preset name:');
@@ -2706,6 +3791,143 @@ function exportAllPresets() {
   setStatus('presets exported');
 }
 // --- 3D LUT loading (Adobe / Resolve .CUBE format) ---------------------------
+// Built-in LUTs are generated as real 3D lookup textures so they use the same
+// shader path as uploaded .cube files, without requiring internet downloads.
+const BUILT_IN_LUT_SIZE = 17;
+const BUILT_IN_LUT_PRESETS = {
+  none: { label: 'none', fn: null },
+  clean_pop: {
+    label: 'Clean Pop',
+    fn: (c) => {
+      let v = gradeContrast(c, 1.08);
+      v = gradeSaturation(v, 1.12);
+      return gradeGamma(v, 0.96);
+    },
+  },
+  gallery_film: {
+    label: 'Gallery Film',
+    fn: (c) => {
+      const l = luminance(c);
+      let v = gradeContrast(c, 0.92);
+      v = gradeSaturation(v, 0.88);
+      v[0] += 0.035 * l;
+      v[1] += 0.018 * l;
+      v[2] -= 0.03 * l;
+      return gradeLift(v, 0.025);
+    },
+  },
+  neon_prism: {
+    label: 'Neon Prism',
+    fn: (c) => {
+      const l = luminance(c);
+      let v = gradeContrast(c, 1.18);
+      v = gradeSaturation(v, 1.42);
+      v[0] += 0.11 * smoothstep(0.35, 1.0, l);
+      v[1] += 0.06 * smoothstep(0.15, 0.8, 1.0 - Math.abs(l - 0.45));
+      v[2] += 0.12 * smoothstep(0.0, 0.65, 1.0 - l);
+      return v.map(clamp01);
+    },
+  },
+  cyan_shadow: {
+    label: 'Cyan Shadow',
+    fn: (c) => {
+      const l = luminance(c);
+      let v = gradeContrast(c, 1.1);
+      v = gradeSaturation(v, 1.18);
+      const sh = smoothstep(0.65, 0.05, l);
+      const hi = smoothstep(0.45, 1.0, l);
+      v[0] = v[0] + 0.045 * hi - 0.06 * sh;
+      v[1] = v[1] + 0.035 * sh;
+      v[2] = v[2] + 0.105 * sh;
+      return v.map(clamp01);
+    },
+  },
+  magenta_heat: {
+    label: 'Magenta Heat',
+    fn: (c) => {
+      const l = luminance(c);
+      let v = gradeContrast(c, 1.16);
+      v = gradeSaturation(v, 1.28);
+      v[0] += 0.09 * smoothstep(0.2, 1.0, l);
+      v[1] -= 0.035 * smoothstep(0.15, 0.85, l);
+      v[2] += 0.055 * smoothstep(0.45, 1.0, l);
+      return v.map(clamp01);
+    },
+  },
+  deep_cosmic: {
+    label: 'Deep Cosmic',
+    fn: (c) => {
+      let v = gradeContrast(c, 1.28);
+      v = gradeSaturation(v, 1.35);
+      v = [Math.pow(clamp01(v[0]), 1.08), Math.pow(clamp01(v[1]), 1.0), Math.pow(clamp01(v[2]), 0.86)];
+      v[0] *= 0.94;
+      v[1] *= 0.98;
+      v[2] *= 1.12;
+      return v.map(clamp01);
+    },
+  },
+  acid_glass: {
+    label: 'Acid Glass',
+    fn: (c) => {
+      const l = luminance(c);
+      let v = gradeContrast(c, 1.22);
+      v = gradeSaturation(v, 1.55);
+      v[0] += 0.055 * Math.sin(l * Math.PI * 2.0);
+      v[1] += 0.08 * smoothstep(0.2, 0.9, l);
+      v[2] += 0.075 * smoothstep(0.75, 0.1, l);
+      return v.map(clamp01);
+    },
+  },
+};
+const BUILT_IN_LUT_OPTIONS = Object.fromEntries(
+  Object.entries(BUILT_IN_LUT_PRESETS).map(([key, preset]) => [preset.label, key])
+);
+BUILT_IN_LUT_OPTIONS['uploaded file'] = 'custom';
+let currentLutSource = 'none';
+
+function clamp01(v) {
+  return Math.min(1, Math.max(0, v));
+}
+function smoothstep(edge0, edge1, x) {
+  const t = clamp01((x - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+function luminance(c) {
+  return c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722;
+}
+function gradeContrast(c, amount) {
+  return c.map(v => clamp01((v - 0.5) * amount + 0.5));
+}
+function gradeSaturation(c, amount) {
+  const l = luminance(c);
+  return c.map(v => clamp01(l + (v - l) * amount));
+}
+function gradeGamma(c, gamma) {
+  return c.map(v => Math.pow(clamp01(v), gamma));
+}
+function gradeLift(c, amount) {
+  return c.map(v => clamp01(v + amount * (1 - v)));
+}
+function buildProceduralLut(fn, size = BUILT_IN_LUT_SIZE) {
+  const N = size, N2 = N * N;
+  const data = new Float32Array(N2 * N * 4);
+  for (let b = 0; b < N; b++) {
+    for (let g = 0; g < N; g++) {
+      for (let r = 0; r < N; r++) {
+        const src = [r / (N - 1), g / (N - 1), b / (N - 1)];
+        const col = fn ? fn(src).map(clamp01) : src;
+        const tx = b * N + r, ty = g;
+        const o = (ty * N2 + tx) * 4;
+        data[o + 0] = col[0];
+        data[o + 1] = col[1];
+        data[o + 2] = col[2];
+        data[o + 3] = 1.0;
+      }
+    }
+  }
+  return { size: N, data };
+}
+
 // Parse a CUBE file's text into { size, data: Float32Array(N*N*N*4) } packed
 // for a 2D strip texture of width N*N, height N. Stride is RGBA float.
 function parseCubeLut(text) {
@@ -2754,7 +3976,7 @@ function parseCubeLut(text) {
   return { size: N, data: out };
 }
 
-function setLutTexture(lut, name) {
+function setLutTexture(lut, name, presetKey = 'custom') {
   if (!lookPass) return;
   // Dispose old texture if any
   const old = lookPass.uniforms.tLut.value;
@@ -2762,6 +3984,8 @@ function setLutTexture(lut, name) {
   if (!lut) {
     lookPass.uniforms.tLut.value = null;
     lookPass.uniforms.uLutSize.value = 0;
+    currentLutSource = 'none';
+    state.lookLutPreset = 'none';
     state.lookLutName = '';
   } else {
     const tex = new THREE.DataTexture(lut.data, lut.size * lut.size, lut.size, THREE.RGBAFormat, THREE.FloatType);
@@ -2773,10 +3997,36 @@ function setLutTexture(lut, name) {
     tex.needsUpdate = true;
     lookPass.uniforms.tLut.value = tex;
     lookPass.uniforms.uLutSize.value = lut.size;
+    currentLutSource = presetKey || 'custom';
+    state.lookLutPreset = presetKey || 'custom';
     state.lookLutName = name || '';
   }
   syncLook();
   guiRefresh();
+}
+
+function applyBuiltInLutPreset(key, opts = {}) {
+  if (key === 'custom') {
+    const hasCustomLut = currentLutSource === 'custom' &&
+      !!lookPass.uniforms.tLut.value &&
+      lookPass.uniforms.uLutSize.value > 1.5;
+    if (!hasCustomLut) {
+      state.lookLutPreset = currentLutSource;
+      guiRefresh();
+      if (!opts.silent) document.getElementById('fileLut').click();
+    }
+    return;
+  }
+  const presetKey = BUILT_IN_LUT_PRESETS[key] ? key : 'none';
+  const preset = BUILT_IN_LUT_PRESETS[presetKey];
+  if (!preset || !preset.fn) {
+    setLutTexture(null, '');
+    if (!opts.silent) setStatus('LUT preset cleared');
+    return;
+  }
+  const lut = buildProceduralLut(preset.fn);
+  setLutTexture(lut, preset.label, presetKey);
+  if (!opts.silent) setStatus(`LUT preset loaded — ${preset.label}`);
 }
 
 document.getElementById('fileLut').addEventListener('change', (e) => {
@@ -2786,7 +4036,7 @@ document.getElementById('fileLut').addEventListener('change', (e) => {
   reader.onload = () => {
     try {
       const lut = parseCubeLut(String(reader.result));
-      setLutTexture(lut, file.name);
+      setLutTexture(lut, file.name, 'custom');
       setStatus(`LUT loaded — ${file.name} (${lut.size}³)`);
     } catch (err) {
       console.error(err);
@@ -2822,16 +4072,22 @@ document.getElementById('fileImport').addEventListener('change', async (e) => {
 // -------------------------------------------------------------------------
 // Sync helpers
 // -------------------------------------------------------------------------
+function effectiveOpticalThickness(physicalThickness, distortionBoost) {
+  const base = Math.max(0.001, Number(physicalThickness) || 0.001);
+  const boost = Math.max(0, Number(distortionBoost) || 0);
+  return base * (1 + boost);
+}
+
 function syncMaterials() {
   lensMaterial.ior = state.ior;
   lensMaterial.dispersion = state.dispersion;
-  lensMaterial.thickness = state.thickness;
+  lensMaterial.thickness = effectiveOpticalThickness(state.thickness, state.distortionBoost);
   lensMaterial.roughness = state.roughness;
   lensMaterial.color.set(state.tint);
   lensMaterial.attenuationColor.set(state.tint);
   lensMaterialB.ior = state.iorB;
   lensMaterialB.dispersion = state.dispersionB;
-  lensMaterialB.thickness = state.thicknessB;
+  lensMaterialB.thickness = effectiveOpticalThickness(state.thicknessB, state.distortionBoostB);
   lensMaterialB.roughness = state.roughnessB;
   lensMaterialB.color.set(state.tintB);
   lensMaterialB.attenuationColor.set(state.tintB);
@@ -3017,7 +4273,8 @@ function resetAll() {
   const d = defaultStateSnapshot();
   for (const k in d) state[k] = d[k];
   loadLensParams('A'); loadLensParams('B');
-  syncMaterials(); syncShader(); syncScene(); syncBloom(); syncLook();
+  applyBuiltInLutPreset(state.lookLutPreset, { silent: true });
+  syncMaterials(); syncShader(); syncScene(); buildEnv(); applyWallMaterial(state.wallMaterial || 'none'); syncBloom(); syncLook();
   buildParamFolders();
   rebuildLenses();
   guiRefresh();
@@ -3033,7 +4290,12 @@ function buildSolidForExport(isB, resolutionOverride = null) {
   const nx = Math.max(4, Math.floor(W / res) + 1);
   const ny = Math.max(4, Math.floor(H / res) + 1);
   const type = LENS_TYPES[isB ? state.lensTypeB : state.lensType];
-  const heightFn = type.fn(isB ? state.paramsB : state.params, W, H);
+  const heightFn = makeLensHeightFn(
+    isB ? state.lensTypeB : state.lensType,
+    isB ? state.paramsB : state.params,
+    W,
+    H
+  );
   const thickness = isB ? state.thicknessB : state.thickness;
 
   const verts = [];
@@ -3280,9 +4542,9 @@ async function doExportFabricatorCleanSTEP() {
       setStatus('clean STEP export needs the Railway app');
       return;
     }
-    showStepExportToast('Building clean STEP for fabricator… this can take 2-4 minutes.', null, { progress: 4, label: 'Preparing CAD' });
+    showStepExportToast('Building verified STEP for fabricator… this can take 2-4 minutes.', null, { progress: 4, label: 'Preparing CAD' });
     startStepExportProgress();
-    setStatus('building clean machinable STEP solid…');
+    setStatus('building verified machinable STEP solid…');
     const cadState = {
       lensType: state.lensType,
       panelWidth: state.panelWidth,
@@ -3291,6 +4553,9 @@ async function doExportFabricatorCleanSTEP() {
       smoothing: state.smoothing,
       shapeScale: state.shapeScale,
       mirrorLens: state.mirrorLens,
+      flatEdgeWidth: state.flatEdgeWidth,
+      stepExportQuality: 'high',
+      opticalCleanSurface: state.opticalCleanSurface,
       thickness: state.thickness,
       params: { ...state.params },
     };
@@ -3304,16 +4569,16 @@ async function doExportFabricatorCleanSTEP() {
 
     const downloadUrl = new URL(data.zipUrl || data.stepUrl, location.href).href;
     finishStepExportProgress(true);
-    showStepExportToast('Clean STEP ready.', downloadUrl, { progress: 100, label: 'Ready', filename: data.filename || '' });
-    setStatus(`clean STEP ready · validated solid saved to ${data.path}`);
+    showStepExportToast('Verified STEP ready.', downloadUrl, { progress: 100, label: 'Ready', filename: data.filename || '' });
+    setStatus(`verified STEP ready · QA package saved to ${data.path}`);
     // Navigating to the generated ZIP is more reliable than an async synthetic
     // click; Chrome treats it as a normal file download instead of a popup.
     setTimeout(() => { window.location.href = downloadUrl; }, 150);
   } catch (e) {
     console.error(e);
     finishStepExportProgress(false);
-    showStepExportToast(`Clean STEP failed: ${e.message || 'see console'}`, null, { progress: 0, label: 'Failed' });
-    setStatus(`clean STEP failed — ${e.message || 'see console'}`);
+    showStepExportToast(`Verified STEP failed: ${e.message || 'see console'}`, null, { progress: 0, label: 'Failed' });
+    setStatus(`verified STEP failed — ${e.message || 'see console'}`);
   }
 }
 
@@ -3323,9 +4588,7 @@ async function doExportFabricatorCleanSTEP() {
 function doExportSpec() {
   try {
     const W = state.panelWidth, H = state.panelHeight;
-    const type = LENS_TYPES[state.lensType];
-    const heightFn = type.fn(state.params, W, H);
-    const wrapped = state.mirrorLens ? (x, y) => heightFn(Math.abs(x), Math.abs(y)) : heightFn;
+    const wrapped = makeLensHeightFn(state.lensType, state.params, W, H);
     // Sample at a fine grid to find peak height + integrated volume estimate.
     const step = 2.0;  // mm
     let maxZ = 0;
@@ -3507,6 +4770,7 @@ function buildParamFolders() {
     if (state.params[k] === undefined) state.params[k] = d.value;
     const lbl = d.label || labelFor(k);
     if (typeof d.value === 'boolean') paramFolderA.add(state.params, k).name(lbl).onChange(rebuildLenses);
+    else if (d.options) paramFolderA.add(state.params, k, d.options).name(lbl).onChange(rebuildLenses);
     else paramFolderA.add(state.params, k, d.min, d.max, d.step).name(lbl).onChange(rebuildSoon).onFinishChange(rebuildLenses);
   }
 
@@ -3531,6 +4795,7 @@ function buildParamFolders() {
     if (state.paramsB[k] === undefined) state.paramsB[k] = d.value;
     const lbl = d.label || labelFor(k);
     if (typeof d.value === 'boolean') paramFolderB.add(state.paramsB, k).name(lbl).onChange(rebuildLenses);
+    else if (d.options) paramFolderB.add(state.paramsB, k, d.options).name(lbl).onChange(rebuildLenses);
     else paramFolderB.add(state.paramsB, k, d.min, d.max, d.step).name(lbl).onChange(rebuildSoon).onFinishChange(rebuildLenses);
   }
 
@@ -3539,6 +4804,7 @@ function buildParamFolders() {
   paramFolderMatB.add(state, 'iorB', 1.0, 2.0, 0.01).name('ior').onChange(syncMaterials);
   paramFolderMatB.add(state, 'dispersionB', 0.0, 20.0, 0.1).name('dispersion (rainbow)').onChange(syncMaterials);
   paramFolderMatB.add(state, 'thicknessB', 1, 120, 1).name('thickness (mm)').onChange(syncMaterials).onFinishChange(rebuildLenses);
+  paramFolderMatB.add(state, 'distortionBoostB', 0.0, 5.0, 0.05).name('distortion boost').onChange(syncMaterials);
   paramFolderMatB.add(state, 'roughnessB', 0, 0.5, 0.005).name('roughness').onChange(syncMaterials);
   paramFolderMatB.addColor(state, 'tintB').name('tint').onChange(syncMaterials);
   paramFolderMatB.add(state, 'exportSTLB').name('export STL (B)');
@@ -4041,10 +5307,16 @@ normalizeState();
   // Shape scale: <1 stretches the lens features outward to fill the panel
   // (less flat margin); >1 squeezes them inward (more flat margin).
   fA.add(state, 'shapeScale', 0.3, 2.0, 0.01).name('shape scale').onChange(rebuildSoon).onFinishChange(rebuildLenses);
-  // Bump shape: number of box-blur passes applied to the height field.
-  // 0 = original sharp peaks. Higher = softer, rounder, plateau-style bumps.
-  // Was capped at 6, bumped to 25 so you can really blur peaks for a glassy look.
-  fA.add(state, 'smoothing', 0, 25, 1).name('bump smoothness').onFinishChange(rebuildLenses);
+  fA.add(state, 'flatEdgeWidth', 0, 80, 1).name('flat edge width (mm)').onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  fA.add(state, 'stepSurfacePreview').name('smooth STEP preview').onChange(rebuildLenses);
+  fA.add(state, 'opticalCleanSurface').name('optical clean surface').onChange(rebuildLenses);
+  fA.add(state, 'stepPreviewInfo').name('STEP preview').listen().disable();
+  // Bump smoothness: blur radius in millimetres applied to the height field.
+  // 0 = original sharp peaks. Higher = softer, rounder, more mould-friendly bumps.
+  fA.add(state, 'smoothing', 0, 25, 1)
+    .name('bump smoothness (mm)')
+    .onChange(rebuildSoon)
+    .onFinishChange(rebuildLenses);
   // (Compare A | B toggle removed at Kit's request. state.compare stays in the
   // schema with default false so the dual-lens code paths can never trigger.
   // The rebuildLenses logic checks state.compare itself so the B lens silently
@@ -4060,6 +5332,7 @@ normalizeState();
   f1.add(state, 'ior', 1.0, 2.0, 0.01).onChange(syncMaterials);
   f1.add(state, 'dispersion', 0.0, 20.0, 0.1).name('dispersion (rainbow)').onChange(syncMaterials);
   f1.add(state, 'thickness', 1, 120, 1).name('thickness (mm)').onChange(syncMaterials).onFinishChange(rebuildLenses);
+  f1.add(state, 'distortionBoost', 0.0, 5.0, 0.05).name('distortion boost').onChange(syncMaterials);
   f1.add(state, 'roughness', 0.0, 0.5, 0.005).onChange(syncMaterials);
   f1.addColor(state, 'tint').onChange(syncMaterials);
 
@@ -4224,6 +5497,7 @@ normalizeState();
   fLook.add(state, 'lookSharpen',    0.0, 1.0, 0.005).name('sharpen').onChange(syncLook);
   fLook.add(state, 'lookVignette',   0.0, 1.0, 0.01).name('vignette').onChange(syncLook);
   fLook.add(state, 'lookGrain',      0.0, 1.0, 0.01).name('film grain').onChange(syncLook);
+  fLook.add(state, 'lookLutPreset', BUILT_IN_LUT_OPTIONS).name('built-in LUT').onChange(v => applyBuiltInLutPreset(v));
   fLook.add(state, 'loadLut').name('load LUT (.cube)…');
   fLook.add(state, 'lookLutMix', 0.0, 1.0, 0.01).name('LUT strength').onChange(syncLook);
   fLook.add(state, 'clearLut').name('clear LUT');
@@ -4269,23 +5543,13 @@ normalizeState();
   fCap.add(state, 'recLoop').name('loopable (reels)').onChange(() => {
     if (typeof rebuildSequenceGUI === 'function') rebuildSequenceGUI();
   });
-  fCap.add(state, 'renderSmooth', ['off (fast)', '2× (clean)', '3× (pristine)', '4× (gallery)']).name('smoothing (SSAA)');
-  fCap.add(state, 'exportStability', ['normal (faster)', 'extra clean (anti-glitch)']).name('export stability');
-
   const fOutput = fCap.addFolder('Output Folder').close();
   fOutput.add(state, 'selectRenderFolder').name('choose folder');
   fOutput.add(state, 'renderFolderLabel').name('current folder').listen().disable();
   fOutput.add(state, 'clearRenderFolder').name('reset to Downloads');
 
-  const fCapAdvanced = fCap.addFolder('Advanced Render Tests').close();
+  const fCapAdvanced = fCap.addFolder('Render Diagnostics').close();
   fCapAdvanced.add(state, 'renderSelfTest').name('run render self-test');
-  // Experimental quality boosts stay tucked away so the normal render path is
-  // easy to read. Trial these on a short test clip first.
-  fCapAdvanced.add(state, 'motionBlurSamples', { 'off (sharp)': 1, '4× (cinematic)': 4, '8× (silky)': 8 }).name('motion blur').onChange(v => { state.motionBlurSamples = +v | 0; });
-  // (Eco render dropdown moved into the Shot Sequence folder — it sits right
-  // next to the "export sequence as video" button so the choice is in front of
-  // you when you actually click render.)
-  fCapAdvanced.add(state, 'superDispersion').name('supersample dispersion');
   // Note: video export now happens via the Shot Sequence "🎬 export sequence as video"
   // button. The standalone offline render / stop / live record / watermark controls
   // were removed at Kit's request — sequences cover all his rendering needs.
@@ -4324,13 +5588,31 @@ normalizeState();
   f3.add(state, 'renderQuality', ['eco','balanced','high','ultra']).name('live quality').onChange(setLiveQuality);
   presentationBtnCtrl = f3.add(state, 'togglePresentationMode').name('⚡ presentation mode (M)');
   f3.add(state, 'shapeView').name('🗺 shape view').onChange(v => applyShapeView(!!v));
+  f3.add(state, 'shapeViewStyle', {
+    smooth: 'smooth',
+    'topographic contours': 'topographic',
+    'height heatmap': 'heatmap',
+  }).name('shape view style').onChange(() => {
+    syncShapeViewMaterial();
+  });
+  f3.add(state, 'shapeViewResolution', 0.5, 4.0, 0.25)
+    .name('shape mesh spacing (mm)')
+    .onChange(() => { if (state.shapeView) rebuildSoon(); })
+    .onFinishChange(() => { if (state.shapeView) rebuildLenses(); });
+  f3.add(state, 'shapeViewInfo').name('shape mesh').listen().disable();
   state.toggleLensHidden = () => applyLensHidden(!state.lensHidden);
   lensHideBtnCtrl = f3.add(state, 'toggleLensHidden').name('👁 hide lens');
   pauseBtnCtrl = f3.add(state, 'togglePause').name('⏯ pause (P)');
   f3.add(state, 'reset').name('reset');
   f3.add(state, 'showDimensions').name('show dimensions overlay').onChange(updateDimensionOverlay);
+  f3.add(state, 'showSectionProfile').name('show centre section').onChange(updateSectionProfileOverlay);
   f3.add(state, 'exportSTL').name('export STL (A)');
-  f3.add(state, 'exportSTEP').name('export clean STEP for fabricator');
+  f3.add(state, 'stepExportQuality', {
+    compact: 'compact',
+    standard: 'standard',
+    'high precision': 'high',
+  }).name('STEP quality').onChange(rebuildLenses);
+  f3.add(state, 'exportSTEP').name('export verified STEP for fabricator');
   f3.add(state, 'exportSpec').name('📄 export fabrication spec');
   f3.add(state, 'screenshot').name('save screenshot (viewport)');
   f3.add(state, 'hiResScreenshot').name('📸 hi-res PNG (4×)');
@@ -4446,6 +5728,7 @@ window.addEventListener('resize', () => {
   bloomPass.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  updateSectionProfileOverlay();
   syncLookResolution(window.innerWidth, window.innerHeight);
   updateAspectOverlay();
 });
@@ -4458,11 +5741,11 @@ let fpsAccum = 0, fpsFrames = 0, fpsLast = performance.now();
 const fpsEl = { textContent: '', style: {} };
 
 // --- camera auto-motion state ---
-let zoomBaseDist = null;
-let zoomPhase = 0;
-let orbitHomeAzimuth = null, orbitHomeElevation = null, orbitPhase = 0;
-let panPhase = 0;
-let loopCameraMode = false;   // set by offline render when recLoop is on
+var zoomBaseDist = null;
+var zoomPhase = 0;
+var orbitHomeAzimuth = null, orbitHomeElevation = null, orbitPhase = 0;
+var panPhase = 0;
+var loopCameraMode = false;   // set by offline render when recLoop is on
 function updateCameraMotion(dt) {
   // In loop mode we force elevation to the same frequency as azimuth and clamp
   // all phases to a single [0..1] cycle per duration so the last frame matches the first.
@@ -4775,14 +6058,16 @@ async function runRenderSelfTest() {
 
   const snap = renderStateSnapshot();
   // Stress the current Prismatica look, not a simplified diagnostic scene.
-  // This mirrors the settings that exposed the export glitch: square 1080p,
-  // 30fps, 2x SSAA, and a camera move through the refractive lens.
+  // This mirrors the current stable export path: square 1080p, 30fps, native
+  // export stability, no SSAA, and a camera move through the refractive lens.
   Object.assign(snap, {
     recFps: 30,
     recResolution: '1080p (Full HD)',
     recAspect: '1:1 square',
-    renderSmooth: '2× (clean)',
+    renderSmooth: 'off (fast)',
+    exportStability: 'normal (faster)',
     motionBlurSamples: 1,
+    superDispersion: false,
     seqEasing: 'linear',
     recLoop: false,
   });
@@ -4808,7 +6093,7 @@ async function runRenderSelfTest() {
 
   state.backgroundRenderStatus = 'self-test: starting 1080p scan…';
   guiRefresh();
-  setStatus('render self-test starting — 1080p square · 30fps · SSAA 2× · scanning for glitches and white-out…');
+  setStatus('render self-test starting — stable export path · 1080p square · 30fps · scanning for glitches and white-out…');
   try {
     const resp = await fetch('/api/render-background', {
       method: 'POST',
@@ -4996,34 +6281,55 @@ function syncEcoBtn() {
 // hides the LED panel + bloom so the form reads cleanly. One-click view of
 // what we're actually fabricating — useful both for me sense-checking the
 // shape and for sending to the fabricator alongside the STL.
-function applyShapeView(on) {
-  state.shapeView = !!on;
+function applyShapeView(on, options = {}) {
+  const next = !!on;
+  const wasOn = !!state.shapeView;
+  state.shapeView = next;
+  if (next && !wasOn && !options.skipDefaultDetail) {
+    state.shapeViewResolution = SHAPE_VIEW_DEFAULT_RESOLUTION_MM;
+  }
+  if (!options.skipRebuild) {
+    rebuildLenses();
+  }
+  syncShapeViewMaterial();
+  if (next && !wasOn && !options.skipDefaultDetail && typeof guiRefresh === 'function') {
+    guiRefresh();
+  }
   const btn = document.getElementById('shapeBtn');
   if (btn) {
-    btn.classList.toggle('on', !!on);
-    btn.textContent = on ? '✓ shape on' : '🗺 shape';
+    btn.classList.toggle('on', next);
+    btn.textContent = next ? '✓ shape on' : '🗺 shape';
   }
   // Swap lens materials and hide the LED panel while shape view is active.
-  if (lensMesh)  lensMesh.material  = on ? shapeViewMaterial : lensMaterial;
-  if (lensMeshB) lensMeshB.material = on ? shapeViewMaterial : lensMaterialB;
-  if (ledPanel)  ledPanel.visible   = !on && state.lensType !== 'logo';
-  if (ledPanelB) ledPanelB.visible  = !on && state.compare;
-  if (ledCasing)  ledCasing.visible  = !on && state.lensType !== 'logo';
-  if (ledCasingB) ledCasingB.visible = !on && state.compare;
-  // Lift the background to a mid-grey for contrast with the warm topo colours.
-  scene.background = new THREE.Color(on ? '#222222' : state.bgColor);
-  if (backdrop && backdrop.material) backdrop.material.color.set(on ? '#1a1a1a' : state.bgColor);
+  if (lensMesh)  lensMesh.material  = next ? shapeViewMaterial : lensMaterial;
+  if (lensMeshB) lensMeshB.material = next ? shapeViewMaterial : lensMaterialB;
+  if (ledPanel)  ledPanel.visible   = !next && state.lensType !== 'logo';
+  if (ledPanelB) ledPanelB.visible  = !next && state.compare;
+  if (ledCasing)  ledCasing.visible  = !next && state.lensType !== 'logo';
+  if (ledCasingB) ledCasingB.visible = !next && state.compare;
+  // Lift the flat background in shape view, then restore the real wall material
+  // on exit. Textured wall presets need applyWallMaterial(); simply setting the
+  // material colour would leave the gallery wall flattened for live/export.
+  if (next) {
+    scene.background = new THREE.Color('#222222');
+    if (backdrop && backdrop.material && (!state.wallMaterial || state.wallMaterial === 'none')) {
+      backdrop.material.color.set('#1a1a1a');
+    }
+  } else {
+    syncScene();
+    applyWallMaterial(state.wallMaterial || 'none');
+  }
   // Disable bloom + look-grade post-processing during shape view — they'd
-  // wash out the contour lines and false-colour ramp.
-  if (bloomPass) bloomPass.enabled = on ? false : !!state.bloomEnabled;
+  // wash out the neutral shaded form.
+  if (bloomPass) bloomPass.enabled = next ? false : !!state.bloomEnabled;
   if (lookPass) {
-    lookPass.uniforms.uSaturation.value = on ? 1.0 : (state.lookSaturation ?? 1.0);
-    lookPass.uniforms.uContrast.value   = on ? 1.0 : (state.lookContrast   ?? 1.0);
-    lookPass.uniforms.uVignette.value   = on ? 0.0 : (state.lookVignette   ?? 0.0);
-    lookPass.uniforms.uGrain.value      = on ? 0.0 : (state.lookGrain      ?? 0.0);
-    lookPass.uniforms.uSharpen.value    = on ? 0.0 : (state.lookSharpen    ?? 0.0);
-    lookPass.enabled = on ? false : lookPass.enabled;
-    if (!on) syncLook();
+    lookPass.uniforms.uSaturation.value = next ? 1.0 : (state.lookSaturation ?? 1.0);
+    lookPass.uniforms.uContrast.value   = next ? 1.0 : (state.lookContrast   ?? 1.0);
+    lookPass.uniforms.uVignette.value   = next ? 0.0 : (state.lookVignette   ?? 0.0);
+    lookPass.uniforms.uGrain.value      = next ? 0.0 : (state.lookGrain      ?? 0.0);
+    lookPass.uniforms.uSharpen.value    = next ? 0.0 : (state.lookSharpen    ?? 0.0);
+    lookPass.enabled = next ? false : lookPass.enabled;
+    if (!next) syncLook();
   }
 }
 
@@ -5147,9 +6453,7 @@ function toggleEcoMode() {
       state.renderSmooth = ecoPreEcoSnapshot.renderSmooth;
       state.bloomEnabled = ecoPreEcoSnapshot.bloomEnabled;
       syncBloom();
-      state.autoOrbit = ecoPreEcoSnapshot.autoOrbit;
-      state.autoZoom = ecoPreEcoSnapshot.autoZoom;
-      state.autoPan = ecoPreEcoSnapshot.autoPan;
+      forceStillCameraState();
       state.panelSmooth = ecoPreEcoSnapshot.panelSmooth;
       ledMat.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
       ledMatB.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
@@ -5242,6 +6546,7 @@ function hideRenderOverlay() {
 }
 async function renderOffline(opts = {}) {
   if (offlineInProgress) return;
+  forceStableExportSettings();
   const framesOnly = !!opts.framesOnly;
   if (!framesOnly && typeof VideoEncoder === 'undefined') { setStatus('WebCodecs not supported in this browser'); return; }
 
@@ -6094,8 +7399,8 @@ animate();
 // uses the clearer Actions → live quality selector.
 
 // -------------------------------------------------------------------------
-// Keyboard shortcuts  (H hide UI · F fullscreen · R record · Space auto-orbit
-// · B toggle bloom · 1-9 load numeric preset · Esc stop recording)
+// Keyboard shortcuts  (H hide UI · F fullscreen · R record · B toggle bloom
+// · 1-9 load numeric preset · Esc stop recording)
 // -------------------------------------------------------------------------
 let uiHidden = false;
 function setUIHidden(hide) {
@@ -6139,13 +7444,7 @@ window.addEventListener('keydown', (e) => {
     setStatus(`bloom ${state.bloomEnabled ? 'on' : 'off'}`);
     e.preventDefault();
   }
-  else if (k === ' ') {
-    state.autoOrbit = !state.autoOrbit;
-    orbitHomeAzimuth = null;
-    guiRefresh();
-    setStatus(`auto orbit ${state.autoOrbit ? 'on' : 'off'}`);
-    e.preventDefault();
-  }
+  else if (k === ' ') { setAnimPaused(!animPaused); e.preventDefault(); }
   else if (k === 'Escape') {
     if (offlineInProgress) { abortOfflineRender(); e.preventDefault(); }
     else if (sequencePlaying) { stopSequencePreview(); e.preventDefault(); }
@@ -6160,6 +7459,8 @@ window.addEventListener('keydown', (e) => {
 window.__prismatica = {
   state, rebuildLenses, scene, camera, renderer, controls,
   ledMat, ledMatB, lensMaterial, lensMaterialB, LENS_TYPES,
+  applyShapeView, activeLensResolution,
+  lensVertexCount: () => lensMesh?.geometry?.attributes?.position?.count || 0,
   applyPreset, guiRefresh, renderOffline, renderInDedicatedChrome, renderStateSnapshot,
   addShotToSequence, removeShotFromSequence, replaceShotInSequence,
   loadShotPose, clearShotSequence, moveShotInSequence,

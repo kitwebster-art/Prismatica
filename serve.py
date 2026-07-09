@@ -344,11 +344,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def build_clean_step(self, state_payload=None):
         try:
             script = os.path.join(DIRECTORY, "exports", "build-fabricator-clean-step.py")
-            py = os.path.expanduser(
-                "~/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3"
-            )
-            if not os.path.exists(py):
-                py = sys.executable
+            python_candidates = [
+                os.path.join(DIRECTORY, ".venv", "bin", "python"),
+                sys.executable,
+                os.path.expanduser("~/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3"),
+            ]
+            py = next((candidate for candidate in python_candidates if os.path.exists(candidate)), sys.executable)
             cmd = [py, script]
             tmp_path = None
             if state_payload is not None:
@@ -373,17 +374,28 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raise RuntimeError(result.stderr or result.stdout or "clean STEP build failed")
 
             rel_dir = "exports/saved/fabricator_clean_step"
-            lens_type = (state_payload or {}).get("lensType") if isinstance(state_payload, dict) else None
-            lens_slug = slugify(lens_type)
-            step_name = f"Prismatica_V2_{lens_slug}_acrylic_lens_clean_solid.step"
-            zip_name = f"Prismatica_V2_{lens_slug}_STEP_file.zip"
-            readme_name = f"README_Prismatica_V2_{lens_slug}_STEP_file.txt"
-            preview_name = f"Prismatica_V2_{lens_slug}_preview_surface_only.obj"
             abs_dir = os.path.join(DIRECTORY, rel_dir)
+            generated = re.findall(r"(/[^\n\r]+/PV2-step-v(\d{3})\.step)", result.stdout)
+            if not generated:
+                raise RuntimeError("clean STEP build did not report a versioned STEP file")
+            step_path, version_text = generated[-1]
+            base = f"PV2-step-v{version_text}"
+            step_name = f"{base}.step"
+            zip_name = f"{base}.zip"
+            readme_name = f"{base}-readme.txt"
+            qa_name = f"{base}-qa.json"
+            pdf_name = f"{base}-validation.pdf"
+            preview_name = f"{base}-preview.obj"
             zip_path = os.path.join(abs_dir, zip_name)
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.write(os.path.join(abs_dir, step_name), arcname=step_name)
+                zf.write(step_path, arcname=step_name)
                 zf.write(os.path.join(abs_dir, readme_name), arcname=readme_name)
+                qa_path = os.path.join(abs_dir, qa_name)
+                if os.path.exists(qa_path):
+                    zf.write(qa_path, arcname=qa_name)
+                pdf_path = os.path.join(abs_dir, pdf_name)
+                if os.path.exists(pdf_path):
+                    zf.write(pdf_path, arcname=pdf_name)
                 preview_path = os.path.join(abs_dir, preview_name)
                 if os.path.exists(preview_path):
                     zf.write(preview_path, arcname=preview_name)
