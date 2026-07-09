@@ -3531,18 +3531,11 @@ function loadPresets() {
     const presets = JSON.parse(stored) || {};
     let changed = false;
     for (const [name, preset] of Object.entries(AUTO_ADDED_PRESETS)) {
-      if (!(name in presets)) {
-        presets[name] = JSON.parse(JSON.stringify(preset));
+      const fresh = JSON.parse(JSON.stringify(preset));
+      if (JSON.stringify(presets[name]) !== JSON.stringify(fresh)) {
+        presets[name] = fresh;
         changed = true;
       }
-    }
-    if (presets['thin sine ripple']?.params?.edge_taper_width === 24) {
-      presets['thin sine ripple'].params.edge_taper_width = 50;
-      changed = true;
-    }
-    if (presets['thin sine ripple'] && presets['thin sine ripple'].lensType !== 'sine_wave_lens') {
-      presets['thin sine ripple'] = JSON.parse(JSON.stringify(LOW_PROFILE_RIPPLE_PRESETS['thin sine ripple']));
-      changed = true;
     }
     if (presets['thin sine stepped ripple']?.lensType === 'stepped_ripple' &&
         presets['thin sine stepped ripple']?.params?.flat_sine_blend === 1) {
