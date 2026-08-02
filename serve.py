@@ -601,6 +601,63 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
+        if self.path == "/api/sculpture-render":
+            webm_path = None
+            mp4_path = None
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length <= 0 or length > 500 * 1024 * 1024:
+                    raise ValueError("invalid render size")
+                ffmpeg = shutil.which("ffmpeg")
+                if not ffmpeg:
+                    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+                        if os.path.exists(candidate):
+                            ffmpeg = candidate
+                            break
+                if not ffmpeg:
+                    raise RuntimeError("ffmpeg is not available for MP4 conversion")
+                seed = re.sub(r"[^0-9]+", "", self.headers.get("X-Render-Seed", "surface")) or "surface"
+                export_dir = os.path.join(DIRECTORY, "exports", "saved", "sculpture_renders")
+                os.makedirs(export_dir, exist_ok=True)
+                stamp = int(time.time())
+                webm_path = os.path.join(export_dir, f"prismatica_surface_{seed}_{stamp}.webm")
+                mp4_path = os.path.join(export_dir, f"prismatica_surface_{seed}_{stamp}.mp4")
+                with open(webm_path, "wb") as f:
+                    remaining = length
+                    while remaining:
+                        chunk = self.rfile.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        remaining -= len(chunk)
+                result = subprocess.run([
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-i", webm_path, "-c:v", "libx264", "-preset", "medium",
+                    "-crf", "17", "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4_path,
+                ], capture_output=True, text=True, timeout=300)
+                if result.returncode != 0 or not os.path.exists(mp4_path):
+                    raise RuntimeError(result.stderr[-1000:] or "MP4 conversion failed")
+                with open(mp4_path, "rb") as f:
+                    payload = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(mp4_path)}"')
+                self.end_headers()
+                self.wfile.write(payload)
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            finally:
+                if webm_path and os.path.exists(webm_path):
+                    try:
+                        os.remove(webm_path)
+                    except OSError:
+                        pass
+            return
+
         if self.path == "/api/render-background":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -657,7 +714,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
 
 
-HOST = "0.0.0.0" if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("PORT") else "127.0.0.1"
+# Prismatica is used from Kit's laptop and phone. Bind on the local network as
+# well as localhost so the same visualizer is available on both devices.
+HOST = "0.0.0.0"
 
 with ReusableTCPServer((HOST, PORT), Handler) as httpd:
     print(f"Serving {DIRECTORY} at http://{HOST}:{PORT}")

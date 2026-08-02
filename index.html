@@ -105,6 +105,16 @@
      stays in the DOM so all the setStatus() calls scattered through the code
      don't need rewriting; it's just visually invisible. */
   #status { display: none; }
+  #constructionCompareLegend, #rearSurfaceCompareLegend {
+    display: none; position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    width: min(calc(100vw - 660px), 1120px); gap: 18px;
+    color: rgba(255,255,255,0.82); font-size: 11px; letter-spacing: 0.12em;
+    text-transform: uppercase; text-align: center; pointer-events: none; z-index: 5;
+  }
+  #constructionCompareLegend { grid-template-columns: repeat(3, 1fr); }
+  #rearSurfaceCompareLegend { grid-template-columns: repeat(2, 1fr); }
+  #constructionCompareLegend.active, #rearSurfaceCompareLegend.active { display: grid; }
+  #constructionCompareLegend span, #rearSurfaceCompareLegend span { padding: 7px 10px; background: rgba(5,5,5,0.58); border: 1px solid rgba(255,255,255,0.14); border-radius: 999px; backdrop-filter: blur(8px); }
   #stepExportToast {
     position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
     z-index: 60; display: none; min-width: 260px; max-width: min(520px, calc(100vw - 32px));
@@ -232,10 +242,299 @@ body.render-mode canvas { opacity: 0.01 !important; pointer-events: none !import
     background-repeat: no-repeat; background-position: right 10px center;
   }
   #renderOverlay .ecoRow select:hover { border-color: #555; color: #fff; }
+  body.portfolio-embed > a[href="sculpture-studio.html"],
+  body.portfolio-embed #dimPanel,
+  body.portfolio-embed #sectionProfilePanel,
+  body.portfolio-embed #status,
+  body.portfolio-embed .lil-gui {
+    display: none !important;
+  }
+  body.portfolio-embed {
+    background: #020303;
+  }
+  body.portfolio-embed #app {
+    opacity: 0;
+    transition: opacity 700ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  body.portfolio-embed.portfolio-ready #app {
+    opacity: 1;
+  }
+  body.portfolio-embed::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 50% 48%, transparent 34%, rgba(0, 0, 0, 0.12) 58%, rgba(0, 0, 0, 0.56) 100%),
+      linear-gradient(180deg, rgba(0, 0, 0, 0.34), transparent 18%, transparent 76%, rgba(0, 0, 0, 0.42));
+  }
+  #portfolioLoader,
+  #portfolioSpec,
+  #portfolioActions {
+    display: none;
+  }
+  body.portfolio-embed #portfolioLoader {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    background: #020303;
+    color: rgba(226, 242, 237, 0.64);
+    font: 9px/1.4 "SF Mono", ui-monospace, Menlo, monospace;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    transition: opacity 420ms ease, visibility 420ms ease;
+  }
+  body.portfolio-embed.portfolio-ready #portfolioLoader {
+    opacity: 0;
+    visibility: hidden;
+  }
+  #portfolioLoader div {
+    display: grid;
+    justify-items: center;
+    gap: 14px;
+  }
+  #portfolioLoader i {
+    width: 34px;
+    height: 1px;
+    overflow: hidden;
+    background: rgba(88, 255, 226, 0.15);
+  }
+  #portfolioLoader i::after {
+    content: "";
+    display: block;
+    width: 50%;
+    height: 100%;
+    background: #58ffe2;
+    animation: portfolio-load 900ms ease-in-out infinite alternate;
+  }
+  @keyframes portfolio-load {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(200%); }
+  }
+  #portfolioBadge {
+    display: none;
+  }
+  body.portfolio-embed #portfolioBadge {
+    display: grid;
+    gap: 6px;
+    position: fixed;
+    top: 22px;
+    left: 24px;
+    z-index: 52;
+    color: rgba(238, 246, 243, 0.94);
+    font: 9px/1.4 "SF Mono", ui-monospace, Menlo, monospace;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    pointer-events: none;
+    text-shadow: 0 1px 16px rgba(0, 0, 0, 0.92);
+  }
+  body.portfolio-embed #portfolioBadge .portfolio-live {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(88, 255, 226, 0.74);
+  }
+  body.portfolio-embed #portfolioBadge .portfolio-live::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #58ffe2;
+    box-shadow: 0 0 12px rgba(88, 255, 226, 0.75);
+  }
+  body.portfolio-embed #portfolioBadge strong {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+  }
+  body.portfolio-embed #portfolioBadge small {
+    color: rgba(255, 255, 255, 0.48);
+    font: inherit;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+  }
+  body.portfolio-embed #portfolioSpec {
+    display: flex;
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    z-index: 52;
+    gap: 16px;
+    color: rgba(228, 239, 235, 0.48);
+    font: 8px/1.4 "SF Mono", ui-monospace, Menlo, monospace;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+  body.portfolio-embed #portfolioSpec span + span {
+    padding-left: 16px;
+    border-left: 1px solid rgba(88, 255, 226, 0.18);
+  }
+  body.portfolio-embed #portfolioActions {
+    display: flex;
+    position: fixed;
+    right: 22px;
+    bottom: 20px;
+    z-index: 62;
+    gap: 7px;
+  }
+  body.portfolio-embed #portfolioActions button {
+    appearance: none;
+    padding: 10px 13px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 2px;
+    background: rgba(4, 6, 6, 0.78);
+    color: rgba(235, 243, 240, 0.7);
+    font: 8px/1 "SF Mono", ui-monospace, Menlo, monospace;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    cursor: pointer;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+  }
+  body.portfolio-embed #portfolioActions button:hover,
+  body.portfolio-embed #portfolioActions button:focus-visible {
+    border-color: rgba(88, 255, 226, 0.72);
+    color: #58ffe2;
+    outline: none;
+  }
+  body.portfolio-embed #portfolioExplore {
+    border-color: rgba(88, 255, 226, 0.42) !important;
+    color: rgba(168, 255, 239, 0.9) !important;
+  }
+  body.portfolio-embed #portfolioReset {
+    display: none;
+  }
+  body.portfolio-embed.portfolio-interactive #portfolioReset {
+    display: block;
+  }
+  body.portfolio-embed #mobilePresetBar {
+    display: flex !important;
+    justify-content: center;
+    left: 50% !important;
+    right: auto !important;
+    bottom: 19px !important;
+    width: min(790px, calc(100vw - 350px));
+    padding: 0 !important;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 2px;
+    background: rgba(4, 6, 6, 0.74) !important;
+    transform: translateX(-50%);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+  body.portfolio-embed #mobilePresetBar button {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 7px;
+    min-width: 118px;
+    margin: 0;
+    padding: 10px 12px;
+    border: 0;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 0;
+    background: transparent;
+    color: rgba(226, 237, 233, 0.48);
+    font: 8px/1 "SF Mono", ui-monospace, Menlo, monospace;
+    letter-spacing: 0.08em;
+    text-align: left;
+    text-transform: uppercase;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 180ms ease, background 180ms ease;
+  }
+  body.portfolio-embed #mobilePresetBar button:last-child {
+    border-right: 0;
+  }
+  body.portfolio-embed #mobilePresetBar button:hover,
+  body.portfolio-embed #mobilePresetBar button:focus-visible {
+    color: rgba(235, 246, 242, 0.92);
+    background: rgba(255, 255, 255, 0.04);
+    outline: none;
+  }
+  body.portfolio-embed #mobilePresetBar button.active {
+    color: #f4faf8;
+    background: rgba(88, 255, 226, 0.08);
+    box-shadow: inset 0 -1px 0 #58ffe2;
+  }
+  body.portfolio-embed #mobilePresetBar button .preset-number {
+    color: #58ffe2;
+  }
+  body.portfolio-embed #mobilePresetBar button .preset-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  @media (max-width: 768px) {
+    body.portfolio-embed #portfolioBadge {
+      top: 14px;
+      left: 14px;
+    }
+    body.portfolio-embed #portfolioBadge strong {
+      font-size: 10px;
+    }
+    body.portfolio-embed #portfolioSpec {
+      display: none;
+    }
+    body.portfolio-embed #portfolioActions {
+      right: 10px;
+      bottom: 72px;
+    }
+    body.portfolio-embed #mobilePresetBar {
+      justify-content: flex-start;
+      left: 10px !important;
+      right: 10px !important;
+      bottom: 12px !important;
+      width: auto;
+      transform: none;
+    }
+    body.portfolio-embed #mobilePresetBar button {
+      min-width: 126px;
+      padding: 10px 11px;
+    }
+  }
+  @media (max-width: 1080px) and (min-width: 769px) {
+    body.portfolio-embed #mobilePresetBar {
+      left: 20px !important;
+      width: calc(100vw - 240px);
+      transform: none;
+      justify-content: flex-start;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body.portfolio-embed #app,
+    body.portfolio-embed #portfolioLoader {
+      transition: none;
+    }
+    #portfolioLoader i::after {
+      animation: none;
+    }
+  }
 </style>
 </head>
 <body>
 <div id="app"></div>
+<div id="portfolioLoader" role="status" aria-live="polite">
+  <div><i></i><span>Calibrating optical field</span></div>
+</div>
+<div id="portfolioBadge" aria-hidden="true">
+  <span class="portfolio-live">Live optical study</span>
+  <strong id="portfolioStudyLabel">03 / Contour compression</strong>
+  <small id="portfolioInteractionHint">Select explore to orbit and zoom</small>
+</div>
+<div id="portfolioSpec" aria-hidden="true">
+  <span>Clear PMMA lens</span>
+  <span>500 × 500 mm</span>
+  <span>LED image field</span>
+</div>
+<div id="portfolioActions">
+  <button id="portfolioReset" type="button">Reset view</button>
+  <button id="portfolioExplore" type="button">Explore optics</button>
+</div>
 <!-- HUD / floating eco + shape buttons removed at Kit's request. Eco and shape
      toggles now live in the Actions folder; FPS is shown there too. -->
 
@@ -257,6 +556,8 @@ body.render-mode canvas { opacity: 0.01 !important; pointer-events: none !import
   <canvas id="sectionProfileCanvas" width="620" height="210"></canvas>
 </div>
 <div id="status">loading…</div>
+<div id="constructionCompareLegend" aria-hidden="true"><span>Solid</span><span>Hollow shell</span><span>Lightweight sheet</span></div>
+<div id="rearSurfaceCompareLegend" aria-hidden="true"><span>Sine rear</span><span>Flat rear</span></div>
 <div id="stepExportToast" role="status" aria-live="polite"></div>
 
 <div id="renderOverlay">
@@ -278,6 +579,8 @@ body.render-mode canvas { opacity: 0.01 !important; pointer-events: none !import
 <input type="file" id="fileImport" class="fi" accept="application/json" />
 <input type="file" id="fileLogo"  class="fi" accept="image/*,.svg" />
 <input type="file" id="fileLut"   class="fi" accept=".cube,.CUBE" />
+
+<a href="sculpture-studio.html" style="position:fixed;left:14px;top:82px;z-index:40;padding:9px 14px;border:1px solid rgba(255,255,255,.2);border-radius:999px;background:rgba(15,15,17,.82);backdrop-filter:blur(10px);color:#d8ff3e;text-decoration:none;font:600 10px/1 -apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;letter-spacing:.13em;text-transform:uppercase">Open Surface Studio</a>
 
 <script type="importmap">
 {
@@ -303,6 +606,12 @@ import GUI from 'lil-gui';
 
 const statusEl = document.getElementById('status');
 const setStatus = (t) => { statusEl.textContent = t; };
+const isPortfolioEmbed = new URLSearchParams(location.search).get('embed') === 'portfolio';
+const isCompactPortfolioEmbed = isPortfolioEmbed && window.matchMedia('(max-width: 768px)').matches;
+const portfolioRenderQuality = isCompactPortfolioEmbed ? 'portfolio-mobile' : 'portfolio-high';
+const portfolioMeshResolution = isCompactPortfolioEmbed ? 1.5 : 1.0;
+const portfolioSmoothing = isCompactPortfolioEmbed ? 4 : 6;
+document.body.classList.toggle('portfolio-embed', isPortfolioEmbed);
 
 // -------------------------------------------------------------------------
 // Renderer + scene
@@ -327,6 +636,14 @@ const QUALITY_PRESETS = {
   eco:      { pixelRatio: 0.75, transmissionScale: 0.22 },
   balanced: { pixelRatio: 1.0, transmissionScale: 0.32 },
   high:     { pixelRatio: 1.5, transmissionScale: 0.45 },
+  'portfolio-mobile': {
+    pixelRatio: Math.max(1.0, Math.min(window.devicePixelRatio, 1.25)),
+    transmissionScale: 0.34,
+  },
+  'portfolio-high': {
+    pixelRatio: Math.max(1.25, Math.min(window.devicePixelRatio, 1.5)),
+    transmissionScale: 0.42,
+  },
   // Ultra keeps the sharp viewport pixel ratio, but stays inside the stable
   // transmission/refraction range. Higher transmission scales can flash stale
   // internal refraction buffers on Chrome/GPU combinations during live orbit.
@@ -391,6 +708,7 @@ controls.target.set(0, 0, 0);
 // overview shots have headroom too.
 controls.minDistance = 10;
 controls.maxDistance = 6000;
+if (isPortfolioEmbed) controls.enabled = false;
 
 // Manual camera only. The live playground should stay still unless Kit moves it
 // directly or explicitly runs a saved shot sequence.
@@ -614,6 +932,7 @@ const ledShader = {
     uPatAxis:    { value: 0 },     // 0=horizontal, 1=vertical, 2=diagonal (scanlines etc.)
     uPanelContrast: { value: 1.0 },// 0.5..2.5 — global contrast applied to the final panel colour
     uPanelMirror:{ value: 0 },     // 1 = fold uv into the top-right quadrant for H+V symmetry
+    uPanelAspect:{ value: 1.0 },   // physical panel W/H; keeps procedural shaders isotropic on non-square screens
     uSqThickness:{ value: 0.5 },
     uSqSoftness: { value: 0.3 },
     uSqMono:     { value: 0 },
@@ -630,6 +949,7 @@ const ledShader = {
     uSqGradScale:{ value: 1.0 },
     uSqGradFlow: { value: 0.15 },
     uPanelSmooth:{ value: 1 },  // 0 = hard cells, 1 = 4-tap AA, 2 = heavy export AA
+    uPortfolio:  { value: isPortfolioEmbed ? 1 : 0 },
   },
   vertexShader: /* glsl */`
     varying vec2 vUv;
@@ -658,6 +978,7 @@ const ledShader = {
     uniform int   uPatAxis;
     uniform float uPanelContrast;
     uniform int   uPanelMirror;
+    uniform float uPanelAspect;
     uniform sampler2D uTex;
     uniform int uHasTex;
     uniform float uSqThickness;
@@ -673,6 +994,7 @@ const ledShader = {
     uniform float uSqGradScale;
     uniform float uSqGradFlow;
     uniform int   uPanelSmooth;
+    uniform int   uPortfolio;
 
     vec3 hsv2rgb(vec3 c) {
       vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
@@ -712,6 +1034,16 @@ const ledShader = {
     }
 
     vec3 computeLedColor(vec2 uv, float t) {
+      // Keep procedural shader coordinates square in physical panel space.
+      // Without this, a wide panel maps the same 0..1 UV range over a much
+      // greater horizontal distance and visibly stretches every pattern.
+      // Uploaded image/video modes keep their existing texture mapping.
+      if (uMode != 7 && uMode != 8) {
+        vec2 aspectScale = uPanelAspect >= 1.0
+          ? vec2(uPanelAspect, 1.0)
+          : vec2(1.0, 1.0 / max(uPanelAspect, 0.0001));
+        uv = (uv - 0.5) * aspectScale + 0.5;
+      }
       // H+V mirror: fold the uv into the top-right quadrant of the panel so the
       // four quadrants mirror each other. Cheapest and most general way to
       // symmetrise every panel mode at once — no per-mode patches needed.
@@ -790,7 +1122,10 @@ const ledShader = {
         float freq = 40.0 * (0.4 + uPatScale * 1.2);
         float v = 0.5 + 0.5 * sin(coord * freq + t * 1.0);
         float band = mix(0.45, 0.03, clamp(uPatSharp, 0.0, 1.0));
-        v = smoothstep(0.5 - band, 0.5 + band, v);
+        // The portfolio edition uses a dark-weighted split like the approved
+        // Prismatica technical render: black field, luminous warped ribbons.
+        float split = (uPortfolio == 1) ? 0.70 : 0.5;
+        v = smoothstep(split - band, split + band, v);
         col = hsv2rgb(vec3(uHueShift, 0.75, v));
       } else if (uMode == 5) {
         vec2 q = px + floor(t * 6.0);
@@ -1188,6 +1523,12 @@ ledPanelB.visible = false;
 ledPanelB.renderOrder = 1;
 scene.add(ledPanelB);
 
+const ledPanelC = new THREE.Mesh(new THREE.PlaneGeometry(800, 800, 1, 1), ledMat);
+ledPanelC.position.z = -30;
+ledPanelC.visible = false;
+ledPanelC.renderOrder = 1;
+scene.add(ledPanelC);
+
 const casingMat = new THREE.MeshStandardMaterial({ color: 0x7a7a7a, metalness: 0.65, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 2 });
 const ledCasing = new THREE.Mesh(new THREE.BoxGeometry(800, 800, 30), casingMat);
 ledCasing.position.z = -30 - 15;
@@ -1197,6 +1538,11 @@ const ledCasingB = new THREE.Mesh(new THREE.BoxGeometry(800, 800, 30), casingMat
 ledCasingB.position.z = -30 - 15;
 ledCasingB.visible = false;
 scene.add(ledCasingB);
+
+const ledCasingC = new THREE.Mesh(new THREE.BoxGeometry(800, 800, 30), casingMat);
+ledCasingC.position.z = -30 - 15;
+ledCasingC.visible = false;
+scene.add(ledCasingC);
 
 const backdrop = new THREE.Mesh(
   new THREE.PlaneGeometry(6000, 6000),
@@ -1332,7 +1678,7 @@ function applyWallAdjust() {
 // panelDistance changes.
 function syncBackdropZ() {
   if (!backdrop) return;
-  const deepest = Math.max(state.thickness || 15, state.thicknessB || state.thickness || 15);
+  const deepest = Math.max(constructionAssemblyDepth(), state.thicknessB || state.thickness || 15);
   backdrop.position.z = -(deepest + (state.panelDistance || 30) + 30) - 2;
 }
 
@@ -1534,6 +1880,84 @@ const LENS_TYPES = {
             ? (r < cutoffRadius ? 1 : 0)
             : 1 - smootherStep01((r - (cutoffRadius - outerFade)) / outerFade);
         }
+        return amp * wave * edgeEnv * Math.max(0, Math.min(1, ringEnv));
+      };
+    },
+  },
+  double_sided_sine_wave: {
+    label: 'Double-sided Sine Wave Lens',
+    requiredConstruction: 'solid_curved_back',
+    selectionDefaults: {
+      thickness: 16,
+      rearMinimumThickness: 10,
+    },
+    params: {
+      wavelength: { value: 80, min: 20, max: 180, step: 1, label: 'front wavelength (mm)' },
+      amplitude: { value: 24, min: 0, max: 80, step: 0.5, label: 'front amplitude (mm)' },
+      visible_rings: { value: 4, min: 1, max: 8, step: 1, label: 'front visible rings' },
+      outer_fade_width: { value: 22, min: 0, max: 100, step: 1, label: 'front outer fade (mm)' },
+      edge_taper_width: { value: 55, min: 0, max: 160, step: 1, label: 'front edge taper (mm)' },
+      ripple_phase: { value: 0.0, min: -1.0, max: 1.0, step: 0.01, label: 'front phase' },
+      rear_sine_enabled: { value: true, label: 'sine rear (off = flat)' },
+      rear_compare_enabled: { value: false, label: 'side-by-side: sine vs flat rear' },
+      rear_wavelength: { value: 120, min: 30, max: 240, step: 1, label: 'rear wavelength (mm)' },
+      rear_amplitude: { value: 8, min: 0, max: 30, step: 0.5, label: 'rear amplitude (mm)' },
+      rear_visible_rings: { value: 3, min: 1, max: 8, step: 1, label: 'rear visible rings' },
+      rear_outer_fade_width: { value: 28, min: 0, max: 120, step: 1, label: 'rear outer fade (mm)' },
+      rear_edge_taper_width: { value: 65, min: 0, max: 180, step: 1, label: 'rear edge taper (mm)' },
+      rear_ripple_phase: { value: 0.32, min: -1.0, max: 1.0, step: 0.01, label: 'rear phase offset' },
+    },
+    // Two genuinely independent sine-wave surfaces. The broader, phase-shifted
+    // rear wave removes material from the back plane while curvedRearZ keeps the
+    // requested minimum wall everywhere.
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const halfW = W * 0.5, halfH = H * 0.5;
+      const wl = Math.max(1, Number(p.wavelength) || 80);
+      const amp = Math.max(0, Number(p.amplitude) || 0);
+      const visibleRings = Math.max(1, Math.round(Number(p.visible_rings) || 4));
+      const outerFade = Math.max(0, Number(p.outer_fade_width) || 0);
+      const edgeTaper = Math.max(0, Number(p.edge_taper_width) || 0);
+      const phase = Number(p.ripple_phase) || 0;
+      const cutoffRadius = Math.max(0, (visibleRings - 0.5) * wl);
+      return (x, y) => {
+        const dEdge = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+        if (dEdge <= 0) return 0;
+        const r = Math.hypot(x, y);
+        if (cutoffRadius > 0 && outerFade <= 0 && r >= cutoffRadius) return 0;
+        const wave = 0.5 * (1 + Math.cos(TAU * (r / wl + phase)));
+        const edgeEnv = edgeTaper <= 0 ? 1 : smootherStep01(dEdge / edgeTaper);
+        const ringEnv = cutoffRadius <= 0
+          ? 1
+          : outerFade <= 0
+            ? (r < cutoffRadius ? 1 : 0)
+            : 1 - smootherStep01((r - (cutoffRadius - outerFade)) / outerFade);
+        return amp * wave * edgeEnv * Math.max(0, Math.min(1, ringEnv));
+      };
+    },
+    rearFn: (p, W, H) => {
+      if (p.rear_sine_enabled === false) return () => 0;
+      const TAU = Math.PI * 2;
+      const halfW = W * 0.5, halfH = H * 0.5;
+      const wl = Math.max(1, Number(p.rear_wavelength) || 120);
+      const amp = Math.max(0, Number(p.rear_amplitude) || 0);
+      const visibleRings = Math.max(1, Math.round(Number(p.rear_visible_rings) || 3));
+      const outerFade = Math.max(0, Number(p.rear_outer_fade_width) || 0);
+      const edgeTaper = Math.max(0, Number(p.rear_edge_taper_width) || 0);
+      const phase = Number(p.rear_ripple_phase) || 0;
+      const cutoffRadius = Math.max(0, (visibleRings - 0.5) * wl);
+      return (x, y) => {
+        const dEdge = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+        if (dEdge <= 0) return 0;
+        const r = Math.hypot(x, y);
+        if (cutoffRadius > 0 && outerFade <= 0 && r >= cutoffRadius) return 0;
+        const wave = 0.5 * (1 + Math.cos(TAU * (r / wl + phase)));
+        const edgeEnv = edgeTaper <= 0 ? 1 : smootherStep01(dEdge / edgeTaper);
+        const ringEnv = cutoffRadius <= 0
+          ? 1
+          : outerFade <= 0
+            ? (r < cutoffRadius ? 1 : 0)
+            : 1 - smootherStep01((r - (cutoffRadius - outerFade)) / outerFade);
         return amp * wave * edgeEnv * Math.max(0, Math.min(1, ringEnv));
       };
     },
@@ -1880,6 +2304,78 @@ const LENS_TYPES = {
       };
     },
   },
+  compound_bulbs: {
+    label: 'Compound Pixel Bulbs',
+    params: {
+      feature_count: { value: 13, min: 5, max: 28, step: 1, label: 'large optical regions' },
+      seed: { value: 41, min: 0, max: 999, step: 1 },
+      min_radius: { value: 55, min: 25, max: 120, step: 1, label: 'minimum radius (mm)' },
+      max_radius: { value: 125, min: 50, max: 220, step: 1, label: 'maximum radius (mm)' },
+      relief: { value: 32, min: 4, max: 80, step: 0.5, label: 'total relief (mm)' },
+      anisotropy: { value: 0.55, min: 0, max: 0.8, step: 0.01, label: 'directional stretch' },
+      well_mix: { value: 0.23, min: 0, max: 0.45, step: 0.01, label: 'inverse well mix' },
+      saddle_strength: { value: 0.65, min: 0, max: 1.2, step: 0.01, label: 'saddle depth' },
+      profile_power: { value: 1.35, min: 0.45, max: 3, step: 0.05, label: 'bulb curvature' },
+      edge_taper_width: { value: 55, min: 10, max: 180, step: 1, label: 'edge taper (mm)' },
+    },
+    // A deliberately irregular freeform field for varied pixel displacement.
+    // Large elliptical convex regions magnify and stretch in different axes;
+    // a few broad inverse wells reverse the local curvature. Their overlaps form
+    // saddle transitions, avoiding both the repetition of a ripple and the
+    // visual noise of a dense microlens array.
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const count = Math.max(3, Math.floor(Number(p.feature_count) || 13));
+      const seed = Number(p.seed) || 0;
+      const minRadius = Math.max(5, Number(p.min_radius) || 55);
+      const maxRadius = Math.max(minRadius, Number(p.max_radius) || 125);
+      const relief = Math.max(0.1, Number(p.relief) || 32);
+      const anisotropy = Math.max(0, Math.min(0.9, Number(p.anisotropy) || 0));
+      const wellMix = Math.max(0, Math.min(0.49, Number(p.well_mix) || 0));
+      const saddleStrength = Math.max(0, Number(p.saddle_strength) || 0);
+      const profilePower = Math.max(0.2, Number(p.profile_power) || 1);
+      const edgeTaper = Math.max(1, Number(p.edge_taper_width) || 55);
+      const rng = mulberry32(seed);
+      const margin = Math.min(maxRadius * 0.55, Math.min(W, H) * 0.22);
+      const wellEvery = wellMix > 0 ? Math.max(3, Math.round(1 / wellMix)) : Infinity;
+      const lobes = [];
+
+      for (let i = 0; i < count; i++) {
+        const radius = i === 0 ? maxRadius : minRadius + rng() * (maxRadius - minRadius);
+        const minorRatio = 1 - anisotropy * (0.35 + 0.65 * rng());
+        const angle = rng() * TAU;
+        const cx = i === 0 ? 0 : rng() * Math.max(1, W - 2 * margin) - (W * 0.5 - margin);
+        const cy = i === 0 ? 0 : rng() * Math.max(1, H - 2 * margin) - (H * 0.5 - margin);
+        const isWell = i > 0 && Number.isFinite(wellEvery) && (i % wellEvery === wellEvery - 1);
+        const strength = isWell
+          ? -relief * saddleStrength * (0.55 + 0.35 * rng())
+          : relief * (0.65 + 0.35 * rng());
+        lobes.push({ cx, cy, rx: radius, ry: radius * minorRatio, angle, strength });
+      }
+
+      return (x, y) => {
+        let field = 0;
+        for (const lobe of lobes) {
+          const dx = x - lobe.cx;
+          const dy = y - lobe.cy;
+          const ca = Math.cos(lobe.angle), sa = Math.sin(lobe.angle);
+          const ex = (dx * ca + dy * sa) / lobe.rx;
+          const ey = (-dx * sa + dy * ca) / lobe.ry;
+          const q = Math.hypot(ex, ey);
+          if (q >= 1) continue;
+          const cap = 0.5 * (1 + Math.cos(Math.PI * q));
+          field += lobe.strength * Math.pow(cap, profilePower);
+        }
+        // Compress the signed field into a non-negative machinable relief. A
+        // zero optical field returns to the flat base, while inverse wells cut
+        // into overlapping positive bulbs to create the useful saddle regions.
+        const shaped = Math.max(0, Math.tanh(field / (relief * 0.72)));
+        const dEdge = Math.min(W * 0.5 - Math.abs(x), H * 0.5 - Math.abs(y));
+        const edgeEnv = dEdge <= 0 ? 0 : smootherStep01(dEdge / edgeTaper);
+        return relief * shaped * edgeEnv;
+      };
+    },
+  },
   pyramid_grid: {
     label: 'Pyramid Grid (v1 homage)',
     params: {
@@ -2041,6 +2537,105 @@ const LENS_TYPES = {
       };
     },
   },
+  optical_fresnel: {
+    label: 'Optical Lab · Fresnel',
+    params: {
+      groove_pitch: { value: 22, min: 4, max: 80, step: 0.5, label: 'groove pitch (mm)' },
+      groove_height: { value: 6, min: 0.5, max: 30, step: 0.25, label: 'groove height (mm)' },
+      ellipticity: { value: 1.0, min: 0.35, max: 2.5, step: 0.01, label: 'ring stretch' },
+      rotation: { value: 0, min: -180, max: 180, step: 1 },
+      center_x: { value: 0, min: -200, max: 200, step: 1, label: 'optical centre X (mm)' },
+      center_y: { value: 0, min: -200, max: 200, step: 1, label: 'optical centre Y (mm)' },
+      groove_softness: { value: 0.08, min: 0, max: 0.45, step: 0.01, label: 'groove rounding' },
+      invert: { value: false },
+    },
+    // Geometric Fresnel study. The saw-tooth annuli reproduce the dominant
+    // surface-normal changes and weight-saving form, but not diffraction from
+    // microscopic production grooves.
+    fn: (p) => {
+      const pitch = Math.max(0.5, Number(p.groove_pitch) || 22);
+      const height = Math.max(0, Number(p.groove_height) || 6);
+      const stretch = Math.max(0.1, Number(p.ellipticity) || 1);
+      const angle = (Number(p.rotation) || 0) * Math.PI / 180;
+      const ca = Math.cos(angle), sa = Math.sin(angle);
+      const softness = Math.max(0, Math.min(0.45, Number(p.groove_softness) || 0));
+      return (x, y) => {
+        const dx = x - (Number(p.center_x) || 0);
+        const dy = y - (Number(p.center_y) || 0);
+        const xr = dx * ca + dy * sa;
+        const yr = (-dx * sa + dy * ca) / stretch;
+        let phase = Math.hypot(xr, yr) / pitch;
+        phase -= Math.floor(phase);
+        let ramp = p.invert ? phase : 1 - phase;
+        if (softness > 0) {
+          const edge = Math.min(1, Math.min(phase, 1 - phase) / softness);
+          ramp = ramp * (edge * edge * (3 - 2 * edge));
+        }
+        return height * ramp;
+      };
+    },
+  },
+  optical_lenticular: {
+    label: 'Optical Lab · Lenticular',
+    params: {
+      pitch: { value: 24, min: 4, max: 100, step: 0.5, label: 'lens pitch (mm)' },
+      height: { value: 8, min: 0.5, max: 40, step: 0.25, label: 'rib height (mm)' },
+      rotation: { value: 0, min: -180, max: 180, step: 1 },
+      profile_power: { value: 1.0, min: 0.35, max: 3.0, step: 0.05, label: 'profile curvature' },
+      phase: { value: 0, min: -1, max: 1, step: 0.01 },
+    },
+    fn: (p) => {
+      const pitch = Math.max(0.5, Number(p.pitch) || 24);
+      const height = Math.max(0, Number(p.height) || 8);
+      const power = Math.max(0.2, Number(p.profile_power) || 1);
+      const angle = (Number(p.rotation) || 0) * Math.PI / 180;
+      const ca = Math.cos(angle), sa = Math.sin(angle);
+      const phase = Number(p.phase) || 0;
+      return (x, y) => {
+        const axis = (x * ca + y * sa) / pitch + phase;
+        const local = (axis - Math.floor(axis)) * 2 - 1;
+        const cap = Math.sqrt(Math.max(0, 1 - local * local));
+        return height * Math.pow(cap, power);
+      };
+    },
+  },
+  optical_microlens: {
+    label: 'Optical Lab · Microlens Array',
+    params: {
+      pitch: { value: 36, min: 8, max: 120, step: 1, label: 'cell pitch (mm)' },
+      height: { value: 10, min: 0.5, max: 40, step: 0.25, label: 'lens height (mm)' },
+      layout: { value: 'hex', options: { hexagonal: 'hex', square: 'square' } },
+      rotation: { value: 0, min: -180, max: 180, step: 1 },
+      fill: { value: 0.96, min: 0.55, max: 1.0, step: 0.01, label: 'cell fill' },
+      profile_power: { value: 1.0, min: 0.35, max: 3.0, step: 0.05, label: 'profile curvature' },
+    },
+    fn: (p) => {
+      const pitch = Math.max(1, Number(p.pitch) || 36);
+      const height = Math.max(0, Number(p.height) || 10);
+      const radius = pitch * 0.5 * Math.max(0.1, Math.min(1, Number(p.fill) || 0.96));
+      const power = Math.max(0.2, Number(p.profile_power) || 1);
+      const angle = (Number(p.rotation) || 0) * Math.PI / 180;
+      const ca = Math.cos(angle), sa = Math.sin(angle);
+      return (x, y) => {
+        const xr = x * ca + y * sa;
+        const yr = -x * sa + y * ca;
+        let cx, cy;
+        if (p.layout === 'square') {
+          cx = Math.round(xr / pitch) * pitch;
+          cy = Math.round(yr / pitch) * pitch;
+        } else {
+          const rowH = pitch * Math.sqrt(3) * 0.5;
+          const row = Math.round(yr / rowH);
+          cy = row * rowH;
+          cx = (Math.round(xr / pitch - (row & 1) * 0.5) + (row & 1) * 0.5) * pitch;
+        }
+        const r = Math.hypot(xr - cx, yr - cy);
+        if (r >= radius) return 0;
+        const cap = Math.sqrt(Math.max(0, 1 - (r * r) / (radius * radius)));
+        return height * Math.pow(cap, power);
+      };
+    },
+  },
   logo: {
     label: 'Custom Logo',
     params: {
@@ -2156,15 +2751,67 @@ function sampleHeightGrid(grid, nx, ny, width, height, x, y) {
   return a * (1 - ty) + b * ty;
 }
 
+function makeCurvedRearReliefFn(width, height, source = state) {
+  const depth = Math.max(0, Number(source.rearDepth) || 0);
+  const scale = Math.max(0.45, Number(source.rearScale) || 1.5);
+  const offsetX = Number(source.rearOffsetX) || 0;
+  const offsetY = Number(source.rearOffsetY) || 0;
+  const edgeTaper = Math.max(18, Math.min(width, height) * 0.09);
+  const lobes = [
+    [-0.22,  0.21, 0.30, 0.22,  0.30, 1.00],
+    [ 0.25,  0.18, 0.24, 0.32, -0.52, 0.88],
+    [-0.08, -0.24, 0.33, 0.21,  0.82, 0.80],
+    [ 0.27, -0.29, 0.19, 0.26,  0.10, 0.68],
+  ];
+  return (x, y) => {
+    if (depth <= 0) return 0;
+    const px = x - offsetX;
+    const py = y - offsetY;
+    let remainder = 1;
+    for (const [cxN, cyN, rxN, ryN, angle, strength] of lobes) {
+      const dx = px - cxN * width;
+      const dy = py - cyN * height;
+      const ca = Math.cos(angle), sa = Math.sin(angle);
+      const rx = Math.max(8, rxN * width * scale);
+      const ry = Math.max(8, ryN * height * scale);
+      const ex = (dx * ca + dy * sa) / rx;
+      const ey = (-dx * sa + dy * ca) / ry;
+      const q = Math.hypot(ex, ey);
+      if (q >= 1) continue;
+      const cap = Math.pow(0.5 * (1 + Math.cos(Math.PI * q)), 1.2) * strength;
+      remainder *= 1 - Math.max(0, Math.min(1, cap));
+    }
+    const dEdge = Math.min(width * 0.5 - Math.abs(x), height * 0.5 - Math.abs(y));
+    const edgeEnv = dEdge <= 0 ? 0 : smootherStep01(dEdge / edgeTaper);
+    return depth * (1 - remainder) * edgeEnv;
+  };
+}
+
+function makeLensRearReliefFn(lensType, params, width, height, source = state) {
+  const type = LENS_TYPES[lensType];
+  if (type && typeof type.rearFn === 'function') {
+    return type.rearFn(params || {}, width, height, source);
+  }
+  return makeCurvedRearReliefFn(width, height, source);
+}
+
+function curvedRearZ(frontZ, rearRelief, baseThickness, minimumThickness) {
+  const base = Math.max(0.25, Number(baseThickness) || 0.25);
+  const minWall = Math.max(0.25, Math.min(base, Number(minimumThickness) || base));
+  return Math.min(-base + Math.max(0, rearRelief), frontZ - minWall);
+}
+
 function makeLensGeometry(heightFn, width, height, resolution, thickness, smoothing = 0) {
   return makeLensGeometryForFootprint(heightFn, width, height, resolution, thickness, smoothing, { kind: 'rect' });
 }
 
-function makeLensGeometryForFootprint(heightFn, width, height, resolution, thickness, smoothing = 0, footprint = { kind: 'rect' }) {
+function makeLensGeometryForFootprint(heightFn, width, height, resolution, thickness, smoothing = 0, footprint = { kind: 'rect' }, construction = 'solid_flat_back', shellThickness = 3, rearReliefFn = null, minimumThickness = thickness) {
   if (footprint && footprint.kind === 'circle') {
     return makeCircularLensGeometry(heightFn, footprint.radius, resolution, thickness);
   }
   const { grid, nx, ny } = buildLensHeightGrid(heightFn, width, height, resolution, smoothing);
+  const curvedRear = construction === 'solid_curved_back' && typeof rearReliefFn === 'function';
+  const rearGrid = curvedRear ? new Float32Array(nx * ny) : null;
 
   const verts = [];
   const indices = [];
@@ -2180,7 +2827,16 @@ function makeLensGeometryForFootprint(heightFn, width, height, resolution, thick
     }
     for (let j = 0; j < nx; j++) {
       const x = -width/2 + (j / (nx - 1)) * width;
-      rowB.push(vert(x, y, -thickness));
+      const topZ = grid[i * nx + j];
+      const rearZ = construction === 'hollow_shell'
+        ? topZ - Math.max(0.25, shellThickness)
+        : construction === 'lightweight_sheet'
+          ? -Math.max(0.25, shellThickness)
+          : curvedRear
+            ? curvedRearZ(topZ, rearReliefFn(x, y), thickness, minimumThickness)
+          : -thickness;
+      if (rearGrid) rearGrid[i * nx + j] = rearZ;
+      rowB.push(vert(x, y, rearZ));
     }
     topIds.push(rowT); botIds.push(rowB);
   }
@@ -2213,6 +2869,28 @@ function makeLensGeometryForFootprint(heightFn, width, height, resolution, thick
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
+  // Shape view must show the true manufactured surface. The live glass preview
+  // uses an equivalent first-order optical normal on the front face so both
+  // refracting surfaces contribute: slope(front) - slope(rear).
+  const physicalNormals = geo.getAttribute('normal').clone();
+  geo.setAttribute('physicalNormal', physicalNormals);
+  if (curvedRear && rearGrid) {
+    const normals = geo.getAttribute('normal');
+    const dx = width / Math.max(1, nx - 1);
+    const dy = height / Math.max(1, ny - 1);
+    const opticalHeight = (i, j) => grid[i * nx + j] - rearGrid[i * nx + j];
+    for (let i = 0; i < ny; i++) {
+      for (let j = 0; j < nx; j++) {
+        const jm = Math.max(0, j - 1), jp = Math.min(nx - 1, j + 1);
+        const im = Math.max(0, i - 1), ip = Math.min(ny - 1, i + 1);
+        const dzdx = (opticalHeight(i, jp) - opticalHeight(i, jm)) / Math.max(0.001, (jp - jm) * dx);
+        const dzdy = (opticalHeight(ip, j) - opticalHeight(im, j)) / Math.max(0.001, (ip - im) * dy);
+        const n = new THREE.Vector3(-dzdx, -dzdy, 1).normalize();
+        normals.setXYZ(topIds[i][j], n.x, n.y, n.z);
+      }
+    }
+    normals.needsUpdate = true;
+  }
   return geo;
 }
 
@@ -2274,6 +2952,7 @@ function makeCircularLensGeometry(heightFn, radius, resolution, thickness) {
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   geo.setIndex(indices);
   geo.computeVertexNormals();
+  geo.setAttribute('physicalNormal', geo.getAttribute('normal').clone());
   return geo;
 }
 
@@ -2562,6 +3241,7 @@ function makeLensMaterial() {
 }
 const lensMaterial  = makeLensMaterial();
 const lensMaterialB = makeLensMaterial();
+const lensMaterialC = makeLensMaterial();
 function makeExportLensMaterial() {
   return new THREE.MeshPhysicalMaterial({
     color: 0xffffff,
@@ -2605,12 +3285,13 @@ const shapeViewMaterial = new THREE.ShaderMaterial({
     uTopoMode:        { value: 0.0 },
   },
   vertexShader: /* glsl */`
+    attribute vec3 physicalNormal;
     varying vec3 vWorldPos;
     varying vec3 vWorldNormal;
     void main() {
       vec4 wp = modelMatrix * vec4(position, 1.0);
       vWorldPos = wp.xyz;
-      vWorldNormal = normalize(mat3(modelMatrix) * normal);
+      vWorldNormal = normalize(mat3(modelMatrix) * physicalNormal);
       gl_Position = projectionMatrix * viewMatrix * wp;
     }
   `,
@@ -2690,7 +3371,7 @@ const shapeViewMaterial = new THREE.ShaderMaterial({
   side: THREE.DoubleSide,
 });
 
-let lensMesh = null, lensMeshB = null;
+let lensMesh = null, lensMeshB = null, lensMeshC = null;
 const SHAPE_VIEW_DEFAULT_RESOLUTION_MM = 1.0;
 const SHAPE_VIEW_MIN_RESOLUTION_MM = 0.5;
 
@@ -2731,6 +3412,14 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   ior: 1.49,
   dispersion: 0.0,
   thickness: 15,
+  construction: 'solid_flat_back', // solid_flat_back | solid_curved_back | hollow_shell | lightweight_sheet
+  rearDepth: 10,                   // maximum material removed from the rear surface
+  rearScale: 1.5,                  // broadens the four rear optical regions
+  rearOffsetX: 30,
+  rearOffsetY: -20,
+  rearMinimumThickness: 10,
+  shellThickness: 3,               // wall or sheet thickness for lightweight construction modes
+  constructionCompare: false,      // show solid, hollow, and sheet side by side
   distortionBoost: 0.0,
   roughness: 0.02,
   tint: '#ffffff',
@@ -2832,6 +3521,17 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
 }));
 
 const state = defaultStateSnapshot();
+if (isPortfolioEmbed) {
+  // The portfolio uses the real studio scene and controls, but at a bounded
+  // live resolution so a second copy of the app can coexist with the website.
+  state.panelWidth = 500;
+  state.panelHeight = 500;
+  state.panelDistance = 35;
+  state.resolution = portfolioMeshResolution;
+  state.smoothing = portfolioSmoothing;
+  state.renderQuality = portfolioRenderQuality;
+  state.stepSurfacePreview = false;
+}
 state.currentPreset = '—';
 state.reset       = () => { resetAll(); };
 state.exportSTL   = () => { doExportSTL(false); };
@@ -2897,8 +3597,26 @@ function loadLensParams(which) {
     for (const k in defs) state.paramsB[k] = defs[k].value;
   }
 }
+
+function applyLensTypeSelectionDefaults(which) {
+  if (which !== 'A') return;
+  const type = LENS_TYPES[state.lensType];
+  if (!type) return;
+  if (type.requiredConstruction) {
+    state.construction = type.requiredConstruction;
+    state.constructionCompare = false;
+  }
+  if (type.selectionDefaults) {
+    for (const [key, value] of Object.entries(type.selectionDefaults)) state[key] = value;
+  }
+}
 loadLensParams('A');
 loadLensParams('B');
+
+function isRearSurfaceComparisonActive() {
+  return state.lensType === 'double_sided_sine_wave'
+    && state.params?.rear_compare_enabled === true;
+}
 
 // -------------------------------------------------------------------------
 // Rebuild
@@ -2964,28 +3682,44 @@ function updateDimensionOverlay() {
   try {
     const W = state.panelWidth, H = state.panelHeight;
     const heightFn = makeLensHeightFn(state.lensType, state.params, W, H);
+    const curvedRear = state.construction === 'solid_curved_back';
+    const rearFn = curvedRear ? makeLensRearReliefFn(state.lensType, state.params, W, H) : null;
     const step = 4.0;
-    let maxZ = 0, volR = 0;
+    let maxZ = 0, volR = 0, volRearRemoved = 0, surfaceArea = 0, minSolid = Infinity;
     const cell = step * step;
     for (let y = -H/2; y <= H/2; y += step) {
       for (let x = -W/2; x <= W/2; x += step) {
         const z = heightFn(x, y);
         if (z > maxZ) maxZ = z;
         if (z > 0) volR += z * cell;
+        if (curvedRear) {
+          const rearZ = curvedRearZ(z, rearFn(x, y), state.thickness, state.rearMinimumThickness);
+          volRearRemoved += Math.max(0, rearZ + state.thickness) * cell;
+          minSolid = Math.min(minSolid, z - rearZ);
+        }
+        if (state.construction === 'hollow_shell') {
+          const zx = heightFn(Math.min(W/2, x + step), y) - z;
+          const zy = heightFn(x, Math.min(H/2, y + step)) - z;
+          surfaceArea += Math.sqrt(1 + (zx/step) ** 2 + (zy/step) ** 2) * cell;
+        }
       }
     }
-    const baseT = state.thickness;
+    const solidConstruction = state.construction === 'solid_flat_back' || curvedRear;
+    const baseT = solidConstruction ? state.thickness : state.shellThickness;
     const totalH = baseT + maxZ;
     const volBase = W * H * baseT;
     // Volume is mm^3. Divide by 1000 to get cm^3, multiply by PMMA density
     // (1.18 g/cm^3), then divide by 1000 to get kg: equivalent to /1e6 * 1.18.
-    const massKg = ((volBase + volR) / 1e6) * 1.18;
+    const volume = state.construction === 'hollow_shell'
+      ? surfaceArea * Math.max(0.25, state.shellThickness)
+      : volBase + volR - volRearRemoved;
+    const massKg = (volume / 1e6) * 1.18;
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
     set('dimFoot',   `${W} × ${H} mm`);
-    set('dimBase',   `${baseT.toFixed(0)} mm`);
+    set('dimBase',   solidConstruction ? `${baseT.toFixed(0)} mm${curvedRear ? ' edge' : ''}` : `${baseT.toFixed(1)} mm ${state.construction === 'hollow_shell' ? 'shell' : 'sheet'}`);
     set('dimPeak',   `${maxZ.toFixed(1)} mm`);
     set('dimTotal',  `${totalH.toFixed(1)} mm`);
-    set('dimNarrow', `${baseT.toFixed(0)} mm`);
+    set('dimNarrow', `${(curvedRear && Number.isFinite(minSolid) ? minSolid : baseT).toFixed(1)} mm`);
     set('dimMass',   `${massKg.toFixed(1)} kg`);
   } catch (_) { /* leave overlay stale on transient errors */ }
 }
@@ -3013,8 +3747,13 @@ function updateSectionProfileOverlay() {
 
   const W = state.panelWidth;
   const H = state.panelHeight;
-  const baseT = Number(state.thickness) || 0;
+  const curvedRear = state.construction === 'solid_curved_back';
+  const solidConstruction = state.construction === 'solid_flat_back' || curvedRear;
+  const baseT = solidConstruction
+    ? (Number(state.thickness) || 0)
+    : Math.max(0.25, Number(state.shellThickness) || 3);
   const heightFn = makeLensHeightFn(state.lensType, state.params, W, H);
+  const rearFn = curvedRear ? makeLensRearReliefFn(state.lensType, state.params, W, H) : null;
   const lensResolution = activeLensResolution();
   const heightGrid = buildLensHeightGrid(heightFn, W, H, lensResolution, state.smoothing);
   const samples = 300;
@@ -3024,7 +3763,10 @@ function updateSectionProfileOverlay() {
     const t = i / (samples - 1);
     const x = -W * 0.5 + W * t;
     const z = Math.max(0, sampleHeightGrid(heightGrid.grid, heightGrid.nx, heightGrid.ny, W, H, x, 0));
-    profile.push({ x, z });
+    const rearWorldZ = curvedRear
+      ? curvedRearZ(z, rearFn(x, 0), baseT, state.rearMinimumThickness)
+      : -baseT;
+    profile.push({ x, z, rear: rearWorldZ + baseT });
     if (z > maxZ) maxZ = z;
   }
 
@@ -3051,21 +3793,30 @@ function updateSectionProfileOverlay() {
   }
   ctx.stroke();
 
-  // Filled acrylic cross-section from rear face to sculpted front surface.
+  const frontZ = (p) => baseT + p.z;
+  const rearZ = (p) => state.construction === 'hollow_shell' ? p.z : curvedRear ? p.rear : 0;
+
+  // Filled acrylic cross-section. Hollow mode draws a thin band whose inner
+  // surface follows the outer surface, making the air cavity visible.
   ctx.beginPath();
-  ctx.moveTo(xFor(-W * 0.5), rearY);
-  for (const p of profile) ctx.lineTo(xFor(p.x), yFor(baseT + p.z));
-  ctx.lineTo(xFor(W * 0.5), rearY);
+  ctx.moveTo(xFor(profile[0].x), yFor(rearZ(profile[0])));
+  for (const p of profile) ctx.lineTo(xFor(p.x), yFor(frontZ(p)));
+  for (let i = profile.length - 1; i >= 0; i--) {
+    const p = profile[i];
+    ctx.lineTo(xFor(p.x), yFor(rearZ(p)));
+  }
   ctx.closePath();
   ctx.fillStyle = 'rgba(137, 218, 231, 0.34)';
   ctx.fill();
 
-  // Rear flat face and base-thickness reference.
+  // Rear surface and base/shell-thickness reference.
   ctx.strokeStyle = '#6e737a';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(padL, rearY);
-  ctx.lineTo(cssW - padR, rearY);
+  profile.forEach((p, i) => {
+    const x = xFor(p.x), y = yFor(rearZ(p));
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  });
   ctx.stroke();
   ctx.strokeStyle = 'rgba(110, 115, 122, 0.42)';
   ctx.setLineDash([5, 5]);
@@ -3083,7 +3834,7 @@ function updateSectionProfileOverlay() {
   ctx.beginPath();
   profile.forEach((p, i) => {
     const x = xFor(p.x);
-    const y = yFor(baseT + p.z);
+    const y = yFor(frontZ(p));
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
@@ -3105,8 +3856,8 @@ function updateSectionProfileOverlay() {
   ctx.fillText('front sculpted surface', padL + 4, padT + 12);
   ctx.fillStyle = '#6b6f78';
   ctx.font = '10px "SF Mono", ui-monospace, Menlo, monospace';
-  ctx.fillText('base thickness', padL + 4, baseY - 5);
-  ctx.fillText('rear flat face', padL + 4, rearY - 5);
+  ctx.fillText(solidConstruction ? 'edge thickness' : 'shell / sheet thickness', padL + 4, baseY - 5);
+  ctx.fillText(state.construction === 'hollow_shell' ? 'curved inner face' : curvedRear ? 'sculpted rear face' : 'rear flat face', padL + 4, rearY - 5);
   ctx.fillText(`${W.toFixed(0)} mm`, cssW - padR - 52, cssH - 12);
   ctx.fillText('centre', xFor(0) - 19, cssH - 12);
   ctx.fillText(`${totalDepth.toFixed(1)} mm`, 4, padT + 4);
@@ -3114,7 +3865,8 @@ function updateSectionProfileOverlay() {
 
   if (info) {
     const smoothLabel = Number(state.smoothing) > 0 ? ` · smooth ${Number(state.smoothing).toFixed(0)}mm` : '';
-    info.textContent = `${state.lensType.replace(/_/g, ' ')} · peak ${maxZ.toFixed(1)}mm · total ${totalDepth.toFixed(1)}mm${smoothLabel}`;
+    const build = state.construction === 'solid_curved_back' ? 'double freeform' : state.construction.replace(/_/g, ' ');
+    info.textContent = `${state.lensType.replace(/_/g, ' ')} · ${build} · peak ${maxZ.toFixed(1)}mm · total ${totalDepth.toFixed(1)}mm${smoothLabel}`;
   }
 }
 
@@ -3126,10 +3878,16 @@ document.getElementById('sectionProfileClose')?.addEventListener('click', () => 
 
 function rebuildLenses() {
   if (lensMesh) { lensMesh.geometry.dispose(); scene.remove(lensMesh); }
+  if (lensMeshC) { lensMeshC.geometry.dispose(); scene.remove(lensMeshC); lensMeshC = null; }
   const lensResolution = activeLensResolution();
   const typeA = LENS_TYPES[state.lensType];
+  const rearSurfaceCompare = isRearSurfaceComparisonActive();
   updateStepPreviewInfo(state.panelWidth, state.panelHeight);
   const hA = makeLensHeightFn(state.lensType, state.params, state.panelWidth, state.panelHeight);
+  const primaryConstruction = state.constructionCompare ? 'solid_flat_back' : state.construction;
+  const rearA = primaryConstruction === 'solid_curved_back'
+    ? makeLensRearReliefFn(state.lensType, state.params, state.panelWidth, state.panelHeight)
+    : null;
   const geoA = makeLensGeometryForFootprint(
     hA,
     state.panelWidth,
@@ -3137,17 +3895,112 @@ function rebuildLenses() {
     lensResolution,
     state.thickness,
     state.smoothing,
-    lensFootprintFor(state.lensType, state.params, state.panelWidth, state.panelHeight)
+    lensFootprintFor(state.lensType, state.params, state.panelWidth, state.panelHeight),
+    primaryConstruction,
+    state.shellThickness,
+    rearA,
+    state.rearMinimumThickness
   );
   lensMesh = new THREE.Mesh(geoA, lensMaterial);
   scene.add(lensMesh);
 
   // LED sits behind the flat back of the lens: lens back is at z = -thickness,
   // so LED is at z = -(thickness + gap)
-  const ledZA = -(state.thickness + state.panelDistance);
-  const ledZB = -(state.thicknessB + state.panelDistance);
+  const ledZA = -((state.constructionCompare ? state.thickness : constructionAssemblyDepth()) + state.panelDistance);
+  const ledZB = rearSurfaceCompare ? ledZA : -(state.thicknessB + state.panelDistance);
 
-  if (state.compare) {
+  if (state.constructionCompare) {
+    const offsetX = state.panelWidth + 30;
+    const panelGeo = () => new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+    const casingGeo = () => new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
+    const hollowGeo = makeLensGeometryForFootprint(
+      hA, state.panelWidth, state.panelHeight, lensResolution, state.thickness, state.smoothing,
+      lensFootprintFor(state.lensType, state.params, state.panelWidth, state.panelHeight),
+      'hollow_shell', state.shellThickness
+    );
+    const sheetGeo = makeLensGeometryForFootprint(
+      hA, state.panelWidth, state.panelHeight, lensResolution, state.thickness, state.smoothing,
+      lensFootprintFor(state.lensType, state.params, state.panelWidth, state.panelHeight),
+      'lightweight_sheet', state.shellThickness
+    );
+    lensMesh.position.set(-offsetX, 0, 0);
+    lensMeshB = lensMeshB || new THREE.Mesh(hollowGeo, lensMaterialB);
+    if (lensMeshB.geometry !== hollowGeo) { lensMeshB.geometry.dispose(); lensMeshB.geometry = hollowGeo; }
+    lensMeshB.material = lensMaterialB;
+    lensMeshB.position.set(0, 0, 0);
+    if (!lensMeshB.parent) scene.add(lensMeshB);
+    lensMeshC = new THREE.Mesh(sheetGeo, lensMaterialC);
+    lensMeshC.position.set(offsetX, 0, 0);
+    scene.add(lensMeshC);
+
+    const depths = [state.thickness, state.shellThickness, state.shellThickness];
+    [ledPanel, ledPanelB, ledPanelC].forEach((panel, i) => {
+      panel.visible = true;
+      panel.position.set((i - 1) * offsetX, 0, -(depths[i] + state.panelDistance));
+      panel.geometry.dispose(); panel.geometry = panelGeo();
+    });
+    [ledCasing, ledCasingB, ledCasingC].forEach((casing, i) => {
+      casing.visible = true;
+      casing.position.set((i - 1) * offsetX, 0, -(depths[i] + state.panelDistance) - 15);
+      casing.geometry.dispose(); casing.geometry = casingGeo();
+    });
+    document.getElementById('constructionCompareLegend')?.classList.add('active');
+    document.getElementById('rearSurfaceCompareLegend')?.classList.remove('active');
+    const totalVerts = geoA.attributes.position.count + hollowGeo.attributes.position.count + sheetGeo.attributes.position.count;
+    state.shapeViewInfo = state.shapeView ? `${lensResolution.toFixed(2)}mm · ${totalVerts.toLocaleString()} verts` : 'off';
+    setStatus(`${typeA.label} · solid / hollow / lightweight · ${state.panelWidth}×${state.panelHeight} mm each`);
+  } else if (rearSurfaceCompare) {
+    const offsetX = state.panelWidth / 2 + 40;
+    lensMesh.position.set(-offsetX, 0, 0);
+    ledPanel.position.set(-offsetX, 0, ledZA);
+    ledPanel.geometry.dispose();
+    ledPanel.geometry = new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+    ledCasing.position.set(-offsetX, 0, ledZA - 15);
+    ledCasing.geometry.dispose();
+    ledCasing.geometry = new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
+
+    if (lensMeshB) { lensMeshB.geometry.dispose(); scene.remove(lensMeshB); }
+    const flatRearParams = { ...state.params, rear_sine_enabled: false, rear_compare_enabled: false };
+    const flatRearHeight = makeLensHeightFn(
+      state.lensType,
+      flatRearParams,
+      state.panelWidth,
+      state.panelHeight
+    );
+    const flatRearGeo = makeLensGeometryForFootprint(
+      flatRearHeight,
+      state.panelWidth,
+      state.panelHeight,
+      lensResolution,
+      state.thickness,
+      state.smoothing,
+      lensFootprintFor(state.lensType, flatRearParams, state.panelWidth, state.panelHeight),
+      'solid_flat_back',
+      state.shellThickness
+    );
+    lensMeshB = new THREE.Mesh(flatRearGeo, lensMaterialB);
+    lensMeshB.position.set(offsetX, 0, 0);
+    scene.add(lensMeshB);
+
+    ledPanelB.visible = true;
+    ledPanelB.position.set(offsetX, 0, ledZB);
+    ledPanelB.geometry.dispose();
+    ledPanelB.geometry = new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+    ledCasingB.visible = true;
+    ledCasingB.position.set(offsetX, 0, ledZB - 15);
+    ledCasingB.geometry.dispose();
+    ledCasingB.geometry = new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
+    ledPanelC.visible = false;
+    ledCasingC.visible = false;
+    document.getElementById('constructionCompareLegend')?.classList.remove('active');
+    document.getElementById('rearSurfaceCompareLegend')?.classList.add('active');
+
+    const shapeNote = state.shapeView ? ` · ShapeView ${lensResolution.toFixed(2)}mm` : '';
+    state.shapeViewInfo = state.shapeView
+      ? `${lensResolution.toFixed(2)}mm · ${(geoA.attributes.position.count + flatRearGeo.attributes.position.count).toLocaleString()} verts`
+      : 'off';
+    setStatus(`Sine rear  ·  Flat rear  ·  identical ${state.panelWidth}×${state.panelHeight} mm fronts${shapeNote}`);
+  } else if (state.compare) {
     const offsetX = state.panelWidth / 2 + 40;
     lensMesh.position.set(-offsetX, 0, 0);
     ledPanel.position.set(-offsetX, 0, ledZA);
@@ -3181,6 +4034,10 @@ function rebuildLenses() {
     ledCasingB.position.set(offsetX, 0, ledZB - 15);
     ledCasingB.geometry.dispose();
     ledCasingB.geometry = new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
+    ledPanelC.visible = false;
+    ledCasingC.visible = false;
+    document.getElementById('constructionCompareLegend')?.classList.remove('active');
+    document.getElementById('rearSurfaceCompareLegend')?.classList.remove('active');
 
     const shapeNote = state.shapeView ? ` · ShapeView ${lensResolution.toFixed(2)}mm` : '';
     state.shapeViewInfo = state.shapeView
@@ -3198,11 +4055,22 @@ function rebuildLenses() {
     if (lensMeshB) { scene.remove(lensMeshB); lensMeshB.geometry.dispose(); lensMeshB = null; }
     ledPanelB.visible = false;
     ledCasingB.visible = false;
+    ledPanelC.visible = false;
+    ledCasingC.visible = false;
+    document.getElementById('constructionCompareLegend')?.classList.remove('active');
+    document.getElementById('rearSurfaceCompareLegend')?.classList.remove('active');
     const shapeNote = state.shapeView ? ` · ShapeView ${lensResolution.toFixed(2)}mm` : '';
     state.shapeViewInfo = state.shapeView
       ? `${lensResolution.toFixed(2)}mm · ${geoA.attributes.position.count.toLocaleString()} verts`
       : 'off';
-    setStatus(`${typeA.label}  ·  ${state.panelWidth}×${state.panelHeight} mm  ·  ${(geoA.attributes.position.count).toLocaleString()} verts${shapeNote}`);
+    const buildLabel = state.construction === 'hollow_shell'
+      ? `hollow shell ${state.shellThickness}mm`
+      : state.construction === 'lightweight_sheet'
+        ? `lightweight sheet ${state.shellThickness}mm`
+        : state.construction === 'solid_curved_back'
+          ? `double freeform · ${state.thickness}mm edge · ${state.rearDepth}mm rear depth`
+        : `solid ${state.thickness}mm base`;
+    setStatus(`${typeA.label}  ·  ${buildLabel}  ·  ${state.panelWidth}×${state.panelHeight} mm  ·  ${(geoA.attributes.position.count).toLocaleString()} verts${shapeNote}`);
   }
   syncBackdropZ();
   updateDimensionOverlay();
@@ -3510,7 +4378,104 @@ const LOW_PROFILE_RIPPLE_PRESETS = {
   },
 };
 
-const AUTO_ADDED_PRESETS = { ...GRAVITATIONAL_WAVE_PRESETS, ...LOW_PROFILE_RIPPLE_PRESETS };
+const OPTICAL_TEST_LAB_PRESETS = {
+  'pixel distortion · compound bulbs': {
+    lensType: 'compound_bulbs', panelWidth: 500, panelHeight: 500, resolution: 1,
+    smoothing: 2, shapeScale: 1, flatEdgeWidth: 8, stepExportQuality: 'high',
+    stepSurfacePreview: true, opticalCleanSurface: false, shapeViewStyle: 'smooth',
+    params: {
+      feature_count: 13, seed: 41, min_radius: 55, max_radius: 125, relief: 32,
+      anisotropy: 0.55, well_mix: 0.23, saddle_strength: 0.65,
+      profile_power: 1.35, edge_taper_width: 55,
+    },
+    construction: 'solid_flat_back', shellThickness: 3,
+    ior: 1.49, dispersion: 2.5, thickness: 8, distortionBoost: 1.0, roughness: 0, tint: '#ffffff',
+    panelMode: 0, panelScale: 36, panelSpeed: 0.06, panelBrightness: 2.5, panelContrast: 1.18,
+    panelHue: 0.58, panelSat: 1.0, panelDistance: 40, pgLineWidth: 0.07, pgFlow: 0.08,
+    mirrorPanel: false, mirrorLens: false, panelSmooth: false, bgColor: '#050505',
+    envPreset: 'gallery', envIntensity: 1.0, bloomEnabled: false,
+    lookSaturation: 1, lookContrast: 1.04, lookVignette: 0.03, lookGrain: 0,
+    lookSharpen: 0, lookLutMix: 1, lookLutPreset: 'none', compare: false,
+  },
+  'pixel distortion · double freeform': {
+    lensType: 'double_sided_sine_wave', panelWidth: 500, panelHeight: 500, resolution: 1,
+    smoothing: 2, shapeScale: 1, flatEdgeWidth: 8, stepExportQuality: 'high',
+    stepSurfacePreview: true, opticalCleanSurface: false, shapeViewStyle: 'smooth',
+    params: {
+      wavelength: 80, amplitude: 24, visible_rings: 4, outer_fade_width: 22,
+      edge_taper_width: 55, ripple_phase: 0,
+      rear_sine_enabled: true, rear_compare_enabled: false,
+      rear_wavelength: 120, rear_amplitude: 8, rear_visible_rings: 3,
+      rear_outer_fade_width: 28, rear_edge_taper_width: 65, rear_ripple_phase: 0.32,
+    },
+    construction: 'solid_curved_back', thickness: 16,
+    rearDepth: 8, rearScale: 1.55, rearOffsetX: 0, rearOffsetY: 0, rearMinimumThickness: 10,
+    shellThickness: 3, ior: 1.49, dispersion: 2.5, distortionBoost: 0.65, roughness: 0, tint: '#ffffff',
+    panelMode: 0, panelScale: 36, panelSpeed: 0.06, panelBrightness: 2.5, panelContrast: 1.18,
+    panelHue: 0.58, panelSat: 1.0, panelDistance: 40, pgLineWidth: 0.07, pgFlow: 0.08,
+    mirrorPanel: false, mirrorLens: false, panelSmooth: false, bgColor: '#050505',
+    envPreset: 'gallery', envIntensity: 1.0, bloomEnabled: false,
+    lookSaturation: 1, lookContrast: 1.04, lookVignette: 0.03, lookGrain: 0,
+    lookSharpen: 0, lookLutMix: 1, lookLutPreset: 'none', compare: false,
+  },
+  'optical lab · three construction comparison': {
+    lensType: 'optical_fresnel', panelWidth: 500, panelHeight: 500, resolution: 1,
+    smoothing: 0, shapeScale: 1, flatEdgeWidth: 8,
+    params: { groove_pitch: 22, groove_height: 8, ellipticity: 1, rotation: 0, center_x: 0, center_y: 0, groove_softness: 0.08, invert: false },
+    construction: 'solid_flat_back', shellThickness: 3, constructionCompare: true,
+    ior: 1.49, dispersion: 2.5, thickness: 15, distortionBoost: 0.6, roughness: 0.01, tint: '#ffffff',
+    panelMode: 15, panelScale: 42, panelSpeed: 0.16, panelBrightness: 2.8, panelHue: 0, panelSat: 1, panelDistance: 16,
+    mirrorPanel: false, mirrorLens: false, bgColor: '#050505', compare: false,
+  },
+  'optical lab · fresnel hollow shell': {
+    lensType: 'optical_fresnel', panelWidth: 500, panelHeight: 500, resolution: 1,
+    smoothing: 0, shapeScale: 1, flatEdgeWidth: 8, stepSurfacePreview: false, opticalCleanSurface: false,
+    params: { groove_pitch: 24, groove_height: 7, ellipticity: 1, rotation: 0, center_x: 0, center_y: 0, groove_softness: 0.06, invert: false },
+    construction: 'hollow_shell', shellThickness: 3, ior: 1.49, dispersion: 2.5, thickness: 15, distortionBoost: 0.6, roughness: 0.01, tint: '#ffffff',
+    panelMode: 3, panelScale: 72, panelSpeed: 0.08, panelBrightness: 3.0, panelHue: 0.52, panelDistance: 30,
+    mirrorPanel: false, mirrorLens: false, bgColor: '#050505', compare: false,
+  },
+  'optical lab · lenticular lightweight sheet': {
+    lensType: 'optical_lenticular', panelWidth: 500, panelHeight: 500, resolution: 1,
+    smoothing: 0, shapeScale: 1, flatEdgeWidth: 6, stepSurfacePreview: false, opticalCleanSurface: false,
+    params: { pitch: 26, height: 8, rotation: 0, profile_power: 1.0, phase: 0 },
+    construction: 'lightweight_sheet', shellThickness: 3, ior: 1.49, dispersion: 1.0, thickness: 12, distortionBoost: 0.75, roughness: 0.01, tint: '#ffffff',
+    panelMode: 4, panelScale: 58, panelSpeed: 0.05, panelBrightness: 3.1, panelHue: 0.08, panelDistance: 24,
+    mirrorPanel: false, mirrorLens: false, bgColor: '#050505', compare: false,
+  },
+  'optical lab · microlens hollow shell': {
+    lensType: 'optical_microlens', panelWidth: 500, panelHeight: 500, resolution: 1,
+    smoothing: 0, shapeScale: 1, flatEdgeWidth: 8, stepSurfacePreview: false, opticalCleanSurface: false,
+    params: { pitch: 42, height: 12, layout: 'hex', rotation: 0, fill: 0.94, profile_power: 1.0 },
+    construction: 'hollow_shell', shellThickness: 3, ior: 1.49, dispersion: 3.0, thickness: 15, distortionBoost: 0.8, roughness: 0.01, tint: '#ffffff',
+    panelMode: 13, panelScale: 64, panelSpeed: 0.1, panelBrightness: 3.2, panelHue: 0.58, panelDistance: 28,
+    mirrorPanel: false, mirrorLens: false, bgColor: '#050505', compare: false,
+  },
+};
+
+const WIDE_SCREEN_PRESETS = {
+  'wide led 5x1 · lenticular': {
+    lensType: 'optical_lenticular', panelWidth: 2000, panelHeight: 400, resolution: 2,
+    smoothing: 2, shapeScale: 1, flatEdgeWidth: 10, stepExportQuality: 'standard',
+    stepSurfacePreview: true, opticalCleanSurface: true, shapeViewStyle: 'smooth',
+    params: { pitch: 40, height: 12, rotation: 0, profile_power: 1.15, phase: 0 },
+    construction: 'lightweight_sheet', shellThickness: 3,
+    ior: 1.49, dispersion: 3.5, thickness: 14, distortionBoost: 0.9, roughness: 0.01, tint: '#ffffff',
+    panelMode: 20, panelScale: 14, panelSpeed: 0.08, panelBrightness: 1.3, panelContrast: 1.2,
+    panelHue: 0.58, panelSat: 1.15, panelDistance: 24, pgLineWidth: 0.055, pgFlow: -0.06,
+    mirrorPanel: true, mirrorLens: false, bgColor: '#030304',
+    envPreset: 'gallery', envIntensity: 1.0, bloomEnabled: false,
+    lookSaturation: 1.05, lookContrast: 1.06, lookVignette: 0.04, lookGrain: 0,
+    lookSharpen: 0, lookLutMix: 1, lookLutPreset: 'none', compare: false,
+  },
+};
+
+const AUTO_ADDED_PRESETS = {
+  ...GRAVITATIONAL_WAVE_PRESETS,
+  ...LOW_PROFILE_RIPPLE_PRESETS,
+  ...OPTICAL_TEST_LAB_PRESETS,
+  ...WIDE_SCREEN_PRESETS,
+};
 
 function bundledPresetSeed() {
   return JSON.parse(JSON.stringify({ ...BUNDLED_PRESETS, ...AUTO_ADDED_PRESETS }));
@@ -3552,7 +4517,7 @@ function presetSnapshot() {
   const s = {};
   for (const k of [
     'lensType','panelWidth','panelHeight','resolution','smoothing','shapeScale','flatEdgeWidth','stepExportQuality','stepSurfacePreview','opticalCleanSurface','shapeViewStyle','shapeViewResolution','params',
-    'ior','dispersion','thickness','distortionBoost','roughness','tint',
+    'ior','dispersion','thickness','construction','rearDepth','rearScale','rearOffsetX','rearOffsetY','rearMinimumThickness','shellThickness','constructionCompare','distortionBoost','roughness','tint',
     'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelSat','panelDistance','pgLineWidth','pgFlow',
     'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
     'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
@@ -3605,6 +4570,15 @@ function applyPreset(p) {
   // Migrate older presets that predate these fields to the current defaults.
   if (!('smoothing' in p)) state.smoothing = 1;
   if (!('resolution' in p) || state.resolution > 2.5) state.resolution = 1.0;
+  if (isPortfolioEmbed) {
+    state.resolution = Math.max(portfolioMeshResolution, Number(state.resolution) || portfolioMeshResolution);
+    state.smoothing = Math.min(
+      portfolioSmoothing,
+      Math.max(portfolioSmoothing / 2, Number(state.smoothing) || portfolioSmoothing),
+    );
+    state.renderQuality = portfolioRenderQuality;
+    state.stepSurfacePreview = false;
+  }
   if (!('bgColor' in p)) state.bgColor = '#050505';
   if (!('bloomEnabled' in p)) state.bloomEnabled = false;
   if (!('pgLineWidth' in p)) state.pgLineWidth = 0.06;
@@ -3629,6 +4603,25 @@ function applyPreset(p) {
   if (!('shapeViewResolution' in p)) state.shapeViewResolution = SHAPE_VIEW_DEFAULT_RESOLUTION_MM;
   state.shapeViewResolution = Math.max(0.5, Math.min(4.0, Number(state.shapeViewResolution) || SHAPE_VIEW_DEFAULT_RESOLUTION_MM));
   if (!('distortionBoost' in p)) state.distortionBoost = 0.0;
+  if (!('construction' in p)) state.construction = 'solid_flat_back';
+  if (!['solid_flat_back','solid_curved_back','hollow_shell','lightweight_sheet'].includes(state.construction)) state.construction = 'solid_flat_back';
+  if (LENS_TYPES[state.lensType]?.requiredConstruction) {
+    state.construction = LENS_TYPES[state.lensType].requiredConstruction;
+    state.constructionCompare = false;
+  }
+  if (!('rearDepth' in p)) state.rearDepth = 10;
+  if (!('rearScale' in p)) state.rearScale = 1.5;
+  if (!('rearOffsetX' in p)) state.rearOffsetX = 30;
+  if (!('rearOffsetY' in p)) state.rearOffsetY = -20;
+  if (!('rearMinimumThickness' in p)) state.rearMinimumThickness = 10;
+  state.rearDepth = Math.max(0, Math.min(40, Number(state.rearDepth) || 0));
+  state.rearScale = Math.max(0.45, Math.min(2.5, Number(state.rearScale) || 1.5));
+  state.rearOffsetX = Math.max(-180, Math.min(180, Number(state.rearOffsetX) || 0));
+  state.rearOffsetY = Math.max(-180, Math.min(180, Number(state.rearOffsetY) || 0));
+  state.rearMinimumThickness = Math.max(0.25, Math.min(40, Number(state.rearMinimumThickness) || 10));
+  if (!('shellThickness' in p)) state.shellThickness = 3;
+  state.shellThickness = Math.max(0.25, Math.min(15, Number(state.shellThickness) || 3));
+  if (!('constructionCompare' in p)) state.constructionCompare = false;
   if (!('distortionBoostB' in p)) state.distortionBoostB = 0.0;
   if (!('mirrorLens' in p)) state.mirrorLens = true;
   if (!('mirrorPanel' in p)) state.mirrorPanel = true;
@@ -3668,6 +4661,7 @@ function applyPreset(p) {
   };
   fillMissingParams(state.lensType, state.params);
   fillMissingParams(state.lensTypeB, state.paramsB);
+  if (!isRearSurfaceComparisonActive()) restoreRearSurfaceCompareView();
   applyBuiltInLutPreset(state.lookLutPreset, { silent: true });
   syncMaterials();
   syncShader();
@@ -3683,7 +4677,101 @@ function applyPreset(p) {
   syncShapeViewMaterial();
   buildParamFolders();
   rebuildLenses();
+  if (state.constructionCompare) fitConstructionCompareView();
+  if (isRearSurfaceComparisonActive()) fitRearSurfaceCompareView();
   guiRefresh();
+}
+
+// -------------------------------------------------------------------------
+// Undo / redo history
+// -------------------------------------------------------------------------
+const UNDO_LIMIT = 50;
+const undoStack = [];
+const redoStack = [];
+let undoBaseline = null;
+let undoApplying = false;
+let undoPointerActive = false;
+let lastHistorySnapshot = null;
+let undoCtrl = null;
+let redoCtrl = null;
+
+function snapshotsEqual(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+function updateUndoControls() {
+  if (undoCtrl) undoCtrl.name(`↶ undo (${undoStack.length})`);
+  if (redoCtrl) redoCtrl.name(`↷ redo (${redoStack.length})`);
+}
+function beginUndoTransaction() {
+  if (undoApplying || undoBaseline) return;
+  undoBaseline = lastHistorySnapshot || presetSnapshot();
+}
+function commitUndoTransaction() {
+  if (undoApplying) return;
+  const after = presetSnapshot();
+  const before = undoBaseline || lastHistorySnapshot;
+  if (before && !snapshotsEqual(before, after)) {
+    undoStack.push(before);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    redoStack.length = 0;
+  }
+  undoBaseline = null;
+  lastHistorySnapshot = after;
+  updateUndoControls();
+}
+function restoreHistorySnapshot(snapshot) {
+  undoApplying = true;
+  undoBaseline = null;
+  applyPreset(snapshot);
+  state.currentPreset = '—';
+  refreshPresetDropdown();
+  guiRefresh();
+  lastHistorySnapshot = presetSnapshot();
+  undoApplying = false;
+}
+function resetUndoHistoryBaseline() {
+  undoStack.length = 0;
+  redoStack.length = 0;
+  undoBaseline = null;
+  lastHistorySnapshot = presetSnapshot();
+  updateUndoControls();
+}
+function undoAppState() {
+  if (!undoStack.length) return;
+  const target = undoStack.pop();
+  redoStack.push(presetSnapshot());
+  restoreHistorySnapshot(target);
+  updateUndoControls();
+  setStatus('undo');
+}
+function redoAppState() {
+  if (!redoStack.length) return;
+  const target = redoStack.pop();
+  undoStack.push(presetSnapshot());
+  restoreHistorySnapshot(target);
+  updateUndoControls();
+  setStatus('redo');
+}
+function installUndoTracking() {
+  const roots = [gui.domElement, gui2.domElement];
+  const isHistoryControl = (target) => !!target?.closest?.('.undo-redo-control');
+  for (const root of roots) {
+    root.addEventListener('pointerdown', (e) => {
+      if (!isHistoryControl(e.target)) { undoPointerActive = true; beginUndoTransaction(); }
+    }, true);
+    root.addEventListener('change', (e) => {
+      if (!isHistoryControl(e.target) && !undoPointerActive) setTimeout(commitUndoTransaction, 0);
+    });
+    root.addEventListener('pointerup', (e) => {
+      undoPointerActive = false;
+      if (!isHistoryControl(e.target)) setTimeout(commitUndoTransaction, 0);
+    }, true);
+    root.addEventListener('keydown', (e) => {
+      if (!isHistoryControl(e.target) && !e.metaKey && !e.ctrlKey && !e.altKey) beginUndoTransaction();
+    }, true);
+    root.addEventListener('keyup', (e) => {
+      if (!isHistoryControl(e.target)) setTimeout(commitUndoTransaction, 0);
+    }, true);
+  }
+  resetUndoHistoryBaseline();
 }
 
 // -------------------------------------------------------------------------
@@ -4071,10 +5159,27 @@ function effectiveOpticalThickness(physicalThickness, distortionBoost) {
   return base * (1 + boost);
 }
 
+function constructionOpticalThickness() {
+  if (state.construction === 'solid_curved_back') {
+    const type = LENS_TYPES[state.lensType];
+    const rearDepth = type && typeof type.rearFn === 'function'
+      ? Math.max(0, Number(state.params?.rear_amplitude) || 0)
+      : Math.max(0, Number(state.rearDepth) || 0);
+    return Math.max(0.25, Number(state.thickness) || 0) + rearDepth * 0.5;
+  }
+  return state.construction === 'solid_flat_back' ? state.thickness : Math.max(0.25, Number(state.shellThickness) || 3);
+}
+
+function constructionAssemblyDepth() {
+  return (state.construction === 'solid_flat_back' || state.construction === 'solid_curved_back')
+    ? state.thickness
+    : Math.max(0.25, Number(state.shellThickness) || 3);
+}
+
 function syncMaterials() {
   lensMaterial.ior = state.ior;
   lensMaterial.dispersion = state.dispersion;
-  lensMaterial.thickness = effectiveOpticalThickness(state.thickness, state.distortionBoost);
+  lensMaterial.thickness = effectiveOpticalThickness(constructionOpticalThickness(), state.distortionBoost);
   lensMaterial.roughness = state.roughness;
   lensMaterial.color.set(state.tint);
   lensMaterial.attenuationColor.set(state.tint);
@@ -4084,7 +5189,88 @@ function syncMaterials() {
   lensMaterialB.roughness = state.roughnessB;
   lensMaterialB.color.set(state.tintB);
   lensMaterialB.attenuationColor.set(state.tintB);
+  if (state.constructionCompare || isRearSurfaceComparisonActive()) {
+    const comparisonThickness = isRearSurfaceComparisonActive()
+      ? state.thickness
+      : state.shellThickness;
+    lensMaterialB.ior = state.ior;
+    lensMaterialB.dispersion = state.dispersion;
+    lensMaterialB.thickness = effectiveOpticalThickness(comparisonThickness, state.distortionBoost);
+    lensMaterialB.roughness = state.roughness;
+    lensMaterialB.color.set(state.tint);
+    lensMaterialB.attenuationColor.set(state.tint);
+  }
+  // The hollow comparison uses the sculpted outer face for the live optical
+  // preview. Rendering both close parallel faces with screen-space
+  // transmission can self-occlude into black even though a real clear shell
+  // would remain transmissive.
+  lensMaterialB.side = state.constructionCompare ? THREE.FrontSide : THREE.DoubleSide;
+  lensMaterialC.ior = state.ior;
+  lensMaterialC.dispersion = state.dispersion;
+  lensMaterialC.thickness = effectiveOpticalThickness(state.shellThickness, state.distortionBoost);
+  lensMaterialC.roughness = state.roughness;
+  lensMaterialC.color.set(state.tint);
+  lensMaterialC.attenuationColor.set(state.tint);
 }
+
+function fitConstructionCompareView() {
+  const totalWidth = state.panelWidth * 3 + 120;
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
+  const usableWidth = Math.max(360, window.innerWidth - 620);
+  const usableAspect = usableWidth / Math.max(360, window.innerHeight);
+  const distanceForHeight = state.panelHeight / (2 * Math.tan(vfov / 2));
+  const distanceForWidth = totalWidth / (2 * Math.tan(vfov / 2) * Math.max(0.4, usableAspect));
+  const z = Math.max(distanceForHeight, distanceForWidth) * 1.16;
+  controls.target.set(0, 0, 0);
+  camera.position.set(0, Math.min(state.panelHeight * 0.18, 120), z);
+  controls.update();
+}
+
+let rearSurfaceCompareCameraSnapshot = null;
+function fitRearSurfaceCompareView() {
+  const totalWidth = state.panelWidth * 2 + 80;
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
+  const usableWidth = Math.max(360, window.innerWidth - 620);
+  const usableAspect = usableWidth / Math.max(360, window.innerHeight);
+  const distanceForHeight = state.panelHeight / (2 * Math.tan(vfov / 2));
+  const distanceForWidth = totalWidth / (2 * Math.tan(vfov / 2) * Math.max(0.4, usableAspect));
+  const z = Math.max(distanceForHeight, distanceForWidth) * 1.14;
+  controls.target.set(0, 0, 0);
+  camera.position.set(0, Math.min(state.panelHeight * 0.12, 80), z);
+  camera.lookAt(controls.target);
+  controls.update();
+}
+
+function restoreRearSurfaceCompareView() {
+  if (!rearSurfaceCompareCameraSnapshot) return;
+  camera.position.copy(rearSurfaceCompareCameraSnapshot.position);
+  controls.target.copy(rearSurfaceCompareCameraSnapshot.target);
+  camera.lookAt(controls.target);
+  controls.update();
+  rearSurfaceCompareCameraSnapshot = null;
+}
+
+function setRearSurfaceComparison(enabled) {
+  const next = !!enabled;
+  if (next && !rearSurfaceCompareCameraSnapshot) {
+    rearSurfaceCompareCameraSnapshot = {
+      position: camera.position.clone(),
+      target: controls.target.clone(),
+    };
+  }
+  state.params.rear_compare_enabled = next;
+  if (next) {
+    state.params.rear_sine_enabled = true;
+    state.compare = false;
+    state.constructionCompare = false;
+  }
+  syncMaterials();
+  rebuildLenses();
+  if (next) fitRearSurfaceCompareView();
+  else restoreRearSurfaceCompareView();
+  guiRefresh();
+}
+
 function syncShader() {
   for (const m of [ledMat, ledMatB]) {
     m.uniforms.uMode.value        = state.panelMode;
@@ -4103,6 +5289,7 @@ function syncShader() {
     m.uniforms.uPatAxis.value    = state.patAxis    != null ? +state.patAxis | 0 : 0;
     m.uniforms.uPanelContrast.value = state.panelContrast != null ? state.panelContrast : 1.0;
     m.uniforms.uPanelMirror.value = state.mirrorPanel ? 1 : 0;
+    m.uniforms.uPanelAspect.value = Math.max(0.0001, state.panelWidth / state.panelHeight);
     m.uniforms.uSqThickness.value = state.sqThickness;
     m.uniforms.uSqSoftness.value  = state.sqSoftness;
     m.uniforms.uSqMono.value      = state.sqMono ? 1 : 0;
@@ -4117,9 +5304,9 @@ function syncShader() {
     m.uniforms.uSqGradFlow.value  = state.sqGradFlow;
     m.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
   }
-  ledPanel.position.z  = -(state.thickness  + state.panelDistance);
+  ledPanel.position.z  = -(constructionAssemblyDepth() + state.panelDistance);
   ledPanelB.position.z = -(state.thicknessB + state.panelDistance);
-  ledCasing.position.z  = -(state.thickness  + state.panelDistance) - 15;
+  ledCasing.position.z  = -(constructionAssemblyDepth() + state.panelDistance) - 15;
   ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15;
   syncBackdropZ();
 }
@@ -4290,6 +5477,11 @@ function buildSolidForExport(isB, resolutionOverride = null) {
     H
   );
   const thickness = isB ? state.thicknessB : state.thickness;
+  const construction = isB ? 'solid_flat_back' : state.construction;
+  const shellThickness = isB ? thickness : Math.max(0.25, Number(state.shellThickness) || 3);
+  const rearFn = !isB && construction === 'solid_curved_back'
+    ? makeLensRearReliefFn(state.lensType, state.params, W, H)
+    : null;
 
   const verts = [];
   const vert = (x, y, z) => { const id = verts.length / 3; verts.push(x, y, z); return id; };
@@ -4303,7 +5495,15 @@ function buildSolidForExport(isB, resolutionOverride = null) {
     }
     for (let j = 0; j < nx; j++) {
       const x = -W/2 + (j / (nx - 1)) * W;
-      rowB.push(vert(x, y, -thickness));
+      const topZ = heightFn(x, y);
+      const rearZ = construction === 'hollow_shell'
+        ? topZ - shellThickness
+        : construction === 'lightweight_sheet'
+          ? -shellThickness
+          : construction === 'solid_curved_back' && rearFn
+            ? curvedRearZ(topZ, rearFn(x, y), thickness, state.rearMinimumThickness)
+          : -thickness;
+      rowB.push(vert(x, y, rearZ));
     }
     topIds.push(rowT); botIds.push(rowB);
   }
@@ -4332,6 +5532,7 @@ function buildSolidForExport(isB, resolutionOverride = null) {
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   geo.setIndex(triangles);
   geo.computeVertexNormals();
+  geo.setAttribute('physicalNormal', geo.getAttribute('normal').clone());
   return new THREE.Mesh(geo, lensMaterial);
 }
 function doExportSTL(isB) {
@@ -4524,6 +5725,10 @@ async function doExportSTEP(isB) {
 }
 
 async function doExportFabricatorCleanSTEP() {
+  if (state.construction !== 'solid_flat_back') {
+    setStatus('verified STEP currently supports solid flat-backed lenses only · use STL for shell/sheet studies');
+    return;
+  }
   try {
     if (location.protocol !== 'http:' && location.protocol !== 'https:') {
       showStepExportToast('Open the Railway app to use clean STEP export.');
@@ -4582,22 +5787,40 @@ function doExportSpec() {
   try {
     const W = state.panelWidth, H = state.panelHeight;
     const wrapped = makeLensHeightFn(state.lensType, state.params, W, H);
+    const curvedRear = state.construction === 'solid_curved_back';
+    const rearFn = curvedRear ? makeLensRearReliefFn(state.lensType, state.params, W, H) : null;
     // Sample at a fine grid to find peak height + integrated volume estimate.
     const step = 2.0;  // mm
     let maxZ = 0;
     let volRipple = 0;
+    let volRearRemoved = 0;
+    let minSolid = Infinity;
+    let surfaceArea = 0;
     const cellArea = step * step;
     for (let y = -H/2; y <= H/2; y += step) {
       for (let x = -W/2; x <= W/2; x += step) {
         const z = wrapped(x, y);
         if (z > maxZ) maxZ = z;
         if (z > 0) volRipple += z * cellArea;
+        if (curvedRear) {
+          const rearZ = curvedRearZ(z, rearFn(x, y), state.thickness, state.rearMinimumThickness);
+          volRearRemoved += Math.max(0, rearZ + state.thickness) * cellArea;
+          minSolid = Math.min(minSolid, z - rearZ);
+        }
+        if (state.construction === 'hollow_shell') {
+          const zx = wrapped(Math.min(W/2, x + step), y) - z;
+          const zy = wrapped(x, Math.min(H/2, y + step)) - z;
+          surfaceArea += Math.sqrt(1 + (zx/step) ** 2 + (zy/step) ** 2) * cellArea;
+        }
       }
     }
-    const baseT = state.thickness;
+    const solidConstruction = state.construction === 'solid_flat_back' || curvedRear;
+    const baseT = solidConstruction ? state.thickness : state.shellThickness;
     const totalH = baseT + maxZ;
     const volBase = W * H * baseT;       // mm³
-    const volTotal = volBase + volRipple; // mm³
+    const volTotal = state.construction === 'hollow_shell'
+      ? surfaceArea * Math.max(0.25, state.shellThickness)
+      : volBase + volRipple - volRearRemoved; // mm³
     const PMMA_DENSITY = 1.18;            // g/cm³
     const massKg = (volTotal / 1000) * PMMA_DENSITY / 1000;
     const lines = [
@@ -4609,14 +5832,20 @@ function doExportSpec() {
       `## Part`,
       `- **Material**: Cast PMMA (acrylic), clear, optical grade preferred`,
       `- **Footprint**: ${W} × ${H} mm`,
-      `- **Base thickness (flat back)**: ${baseT} mm`,
+      `- **Construction**: ${state.construction.replace(/_/g, ' ')}`,
+      `- **${curvedRear ? 'Edge thickness' : state.construction === 'solid_flat_back' ? 'Base thickness (flat back)' : 'Shell / sheet thickness'}**: ${baseT} mm`,
+      ...(curvedRear ? [
+        `- **Rear dip depth target**: ${state.rearDepth} mm`,
+        `- **Rear dip scale / offset**: ${state.rearScale} / ${state.rearOffsetX}, ${state.rearOffsetY} mm`,
+      ] : []),
       `- **Maximum surface height above base**: ${maxZ.toFixed(1)} mm`,
       `- **Overall part height**: ${totalH.toFixed(1)} mm (footprint × peak)`,
-      `- **Narrowest section**: ${baseT} mm (at ripple troughs and panel edges)`,
+      `- **Narrowest section**: ${(curvedRear && Number.isFinite(minSolid) ? minSolid : baseT).toFixed(1)} mm`,
       ``,
       `## Volume + mass`,
       `- Base slab volume: ${(volBase / 1e6).toFixed(2)} L`,
       `- Sculpted ripple volume: ${(volRipple / 1e6).toFixed(2)} L`,
+      ...(curvedRear ? [`- Rear sculpting removed: ${(volRearRemoved / 1e6).toFixed(2)} L`] : []),
       `- Total volume: ${(volTotal / 1e6).toFixed(2)} L`,
       `- Estimated mass (cast PMMA, ρ = 1.18 g/cm³): **${massKg.toFixed(1)} kg**`,
       ``,
@@ -4631,12 +5860,12 @@ function doExportSpec() {
       `- Tint: ${state.tint}`,
       ``,
       `## Files supplied`,
-      `- High-resolution STL (sealed solid: top + flat back + perimeter walls)`,
+      `- High-resolution STL (sealed solid: top + ${curvedRear ? 'sculpted rear' : 'flat back'} + perimeter walls)`,
       `- This spec sheet`,
       ``,
       `## Manufacturing notes`,
       `- Top sculpted face: diamond-polish or vapour-polish for optical clarity.`,
-      `- Bottom flat face: standard machined finish acceptable; fine surface texture is fine since it sits against the LED enclosure.`,
+      `- ${curvedRear ? 'Rear sculpted face: optical polish required because it is an active refracting surface.' : 'Bottom flat face: standard machined finish acceptable; fine surface texture is fine since it sits against the LED enclosure.'}`,
       `- Tolerance on overall dimensions: ±0.5 mm acceptable; surface profile tolerance ±0.2 mm.`,
       `- Side walls: clean cut, can be polished or matte to taste.`,
       `- 5-axis CNC milling on cast PMMA stock is the expected process. Diamond-turning is overkill for this scale.`,
@@ -4723,6 +5952,10 @@ function doHiResScreenshot(scale = 4) {
 // position), composition / output / actions on the left (CSS-overridden).
 const gui = new GUI({ title: 'Prismatica — Lens' });
 const gui2 = new GUI({ title: 'Composition + Output' });
+if (isPortfolioEmbed) {
+  gui.domElement.style.display = 'none';
+  gui2.domElement.style.display = 'none';
+}
 gui2.domElement.style.left = '0';
 gui2.domElement.style.right = 'auto';
 gui2.domElement.style.top = '0';
@@ -4762,7 +5995,24 @@ function buildParamFolders() {
     // Defensive: if a saved preset is missing a newer param, backfill from the lens type's default.
     if (state.params[k] === undefined) state.params[k] = d.value;
     const lbl = d.label || labelFor(k);
-    if (typeof d.value === 'boolean') paramFolderA.add(state.params, k).name(lbl).onChange(rebuildLenses);
+    if (typeof d.value === 'boolean') {
+      const ctrl = paramFolderA.add(state.params, k).name(lbl);
+      if (state.lensType === 'double_sided_sine_wave' && k === 'rear_compare_enabled') {
+        ctrl.onChange(setRearSurfaceComparison);
+      } else if (state.lensType === 'double_sided_sine_wave' && k === 'rear_sine_enabled') {
+        ctrl.onChange((on) => {
+          if (!on && isRearSurfaceComparisonActive()) {
+            state.params.rear_compare_enabled = false;
+            setRearSurfaceComparison(false);
+          } else {
+            syncMaterials();
+            rebuildLenses();
+          }
+        });
+      } else {
+        ctrl.onChange(rebuildLenses);
+      }
+    }
     else if (d.options) paramFolderA.add(state.params, k, d.options).name(lbl).onChange(rebuildLenses);
     else paramFolderA.add(state.params, k, d.min, d.max, d.step).name(lbl).onChange(rebuildSoon).onFinishChange(rebuildLenses);
   }
@@ -5291,7 +6541,15 @@ normalizeState();
 (function buildGUI() {
   fA = gui.addFolder('A · lens');
   fA.add(state, 'lensType', Object.fromEntries(Object.entries(LENS_TYPES).map(([k, v]) => [v.label, k])))
-    .name('type').onChange(() => { loadLensParams('A'); buildParamFolders(); rebuildLenses(); });
+    .name('type').onChange(() => {
+      restoreRearSurfaceCompareView();
+      loadLensParams('A');
+      applyLensTypeSelectionDefaults('A');
+      syncMaterials();
+      buildParamFolders();
+      rebuildLenses();
+      guiRefresh();
+    });
   // Create the shape sub-folder up front so it sits directly under the type dropdown.
   paramFolderA = fA.addFolder('shape');
   fA.add(state, 'panelWidth', 100, 2000, 10).name('panel W (mm)').onFinishChange(rebuildLenses);
@@ -5322,9 +6580,37 @@ normalizeState();
   buildParamFolders();
 
   const f1 = gui.addFolder('A · acrylic');
+  f1.add(state, 'construction', {
+    'solid · flat rear': 'solid_flat_back',
+    'solid · sculpted rear': 'solid_curved_back',
+    'hollow · parallel shell': 'hollow_shell',
+    'lightweight · optical sheet': 'lightweight_sheet',
+  }).name('construction').onChange(() => {
+    const required = LENS_TYPES[state.lensType]?.requiredConstruction;
+    if (required && state.construction !== required) {
+      state.construction = required;
+      setStatus(`${LENS_TYPES[state.lensType].label} requires a curved rear surface`);
+      guiRefresh();
+    }
+    syncMaterials();
+    rebuildLenses();
+  });
+  f1.add(state, 'constructionCompare').name('compare all 3').onChange((on) => {
+    state.compare = false;
+    syncMaterials();
+    rebuildLenses();
+    if (on) fitConstructionCompareView();
+  });
+  f1.add(state, 'shellThickness', 0.5, 15, 0.25).name('shell / sheet (mm)').onChange(syncMaterials).onFinishChange(rebuildLenses);
   f1.add(state, 'ior', 1.0, 2.0, 0.01).onChange(syncMaterials);
   f1.add(state, 'dispersion', 0.0, 20.0, 0.1).name('dispersion (rainbow)').onChange(syncMaterials);
   f1.add(state, 'thickness', 1, 120, 1).name('thickness (mm)').onChange(syncMaterials).onFinishChange(rebuildLenses);
+  const fRear = f1.addFolder('sculpted rear');
+  fRear.add(state, 'rearDepth', 0, 40, 0.5).name('dip depth (mm)').onChange(() => { syncMaterials(); rebuildSoon(); }).onFinishChange(rebuildLenses);
+  fRear.add(state, 'rearScale', 0.45, 2.5, 0.01).name('dip size').onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  fRear.add(state, 'rearOffsetX', -180, 180, 1).name('offset X (mm)').onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  fRear.add(state, 'rearOffsetY', -180, 180, 1).name('offset Y (mm)').onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  fRear.add(state, 'rearMinimumThickness', 2, 40, 0.5).name('minimum wall (mm)').onChange(rebuildSoon).onFinishChange(rebuildLenses);
   f1.add(state, 'distortionBoost', 0.0, 5.0, 0.05).name('distortion boost').onChange(syncMaterials);
   f1.add(state, 'roughness', 0.0, 0.5, 0.005).onChange(syncMaterials);
   f1.addColor(state, 'tint').onChange(syncMaterials);
@@ -5379,7 +6665,7 @@ normalizeState();
   const ctlPgLineWidth = f2.add(state, 'pgLineWidth', 0.0, 0.4, 0.005).name('grid line thickness').onChange(v => { ledMat.uniforms.uPgLineWidth.value = v; ledMatB.uniforms.uPgLineWidth.value = v; });
   const ctlPgFlow      = f2.add(state, 'pgFlow', -5.0, 5.0, 0.01).name('grid drift speed').onChange(v => { ledMat.uniforms.uPgFlow.value = v; ledMatB.uniforms.uPgFlow.value = v; });
   const ctlMirrorPanel = f2.add(state, 'mirrorPanel').name('mirror H + V (symmetric)').onChange(v => { ledMat.uniforms.uPanelMirror.value = v ? 1 : 0; ledMatB.uniforms.uPanelMirror.value = v ? 1 : 0; });
-  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { ledPanel.position.z = -(state.thickness + state.panelDistance); ledPanelB.position.z = -(state.thicknessB + state.panelDistance); ledCasing.position.z = -(state.thickness + state.panelDistance) - 15; ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15; syncBackdropZ(); });
+  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { const depthA = constructionAssemblyDepth(); ledPanel.position.z = -(depthA + state.panelDistance); ledPanelB.position.z = -(state.thicknessB + state.panelDistance); ledCasing.position.z = -(depthA + state.panelDistance) - 15; ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15; syncBackdropZ(); });
   const ctlPanelSmooth = f2.add(state, 'panelSmooth').name('smooth panel (anti-alias)').onChange(v => { ledMat.uniforms.uPanelSmooth.value = v ? 1 : 0; ledMatB.uniforms.uPanelSmooth.value = v ? 1 : 0; });
   const ctlLoadImage   = f2.add(state, 'loadImage').name('load image…');
   const ctlLoadVideo   = f2.add(state, 'loadVideo').name('load video…');
@@ -5596,6 +6882,12 @@ normalizeState();
   state.toggleLensHidden = () => applyLensHidden(!state.lensHidden);
   lensHideBtnCtrl = f3.add(state, 'toggleLensHidden').name('👁 hide lens');
   pauseBtnCtrl = f3.add(state, 'togglePause').name('⏯ pause (P)');
+  state.undoAppState = undoAppState;
+  state.redoAppState = redoAppState;
+  undoCtrl = f3.add(state, 'undoAppState').name('↶ undo (0)');
+  redoCtrl = f3.add(state, 'redoAppState').name('↷ redo (0)');
+  undoCtrl.domElement.classList.add('undo-redo-control');
+  redoCtrl.domElement.classList.add('undo-redo-control');
   f3.add(state, 'reset').name('reset');
   f3.add(state, 'showDimensions').name('show dimensions overlay').onChange(updateDimensionOverlay);
   f3.add(state, 'showSectionProfile').name('show centre section').onChange(updateSectionProfileOverlay);
@@ -5615,6 +6907,8 @@ normalizeState();
   f3.add(state, 'fpsText').name('frame rate').listen().disable();
 })();
 
+installUndoTracking();
+
 // -------------------------------------------------------------------------
 // Init + loop
 // -------------------------------------------------------------------------
@@ -5627,27 +6921,126 @@ syncLook();
 applyRenderQuality(state.renderQuality);
 syncPresentationBtn();
 
-// Startup: prefer user-saved defaults, then fall back to preset "1", then built-ins.
+const PORTFOLIO_PRESETS = ['1', '2', '3', '4', '5', '6'];
+const PORTFOLIO_STUDY_LABELS = {
+  '1': 'Contour fold',
+  '2': 'Pixel lattice',
+  '3': 'Contour compression',
+  '4': 'Chromatic grid',
+  '5': 'Spectral bands',
+  '6': 'Ripple field',
+};
+let portfolioInteractive = !isPortfolioEmbed;
+
+function resetPortfolioCamera() {
+  // Product-first framing, informed by the approved technical overview render:
+  // the object fills the stage and the three-quarter angle reveals both the
+  // acrylic relief and the dark enclosure behind it.
+  camera.position.set(210, 105, 930);
+  controls.target.set(0, 0, -5);
+  controls.update();
+  liveSettleFrames = Math.max(liveSettleFrames, 2);
+}
+
+function setPortfolioInteractive(next) {
+  if (!isPortfolioEmbed) return;
+  portfolioInteractive = !!next;
+  controls.enabled = portfolioInteractive;
+  document.body.classList.toggle('portfolio-interactive', portfolioInteractive);
+  const exploreBtn = document.getElementById('portfolioExplore');
+  const interactionHint = document.getElementById('portfolioInteractionHint');
+  if (exploreBtn) exploreBtn.textContent = portfolioInteractive ? 'Release scroll' : 'Explore optics';
+  if (interactionHint) {
+    interactionHint.textContent = portfolioInteractive
+      ? 'Drag to orbit · scroll to zoom · escape to release'
+      : 'Select explore to orbit and zoom';
+  }
+}
+
+function applyPortfolioPreset(name) {
+  const preset = BUNDLED_PRESETS[name] || BUNDLED_PRESETS['1'];
+  const snap = defaultStateSnapshot();
+  Object.assign(snap, JSON.parse(JSON.stringify(preset)));
+  // Keep the authentic scene and optics while bounding the embedded copy so it
+  // can coexist smoothly with the surrounding portfolio page.
+  snap.resolution = Math.max(portfolioMeshResolution, Number(snap.resolution) || portfolioMeshResolution);
+  snap.smoothing = Math.min(
+    portfolioSmoothing,
+    Math.max(portfolioSmoothing / 2, Number(snap.smoothing) || portfolioSmoothing),
+  );
+  snap.renderQuality = portfolioRenderQuality;
+  snap.stepSurfacePreview = false;
+  snap.opticalCleanSurface = false;
+  snap.compare = false;
+  snap.panelBrightness = Math.min(2.2, Number(snap.panelBrightness) || 2.2);
+  snap.panelContrast = Math.max(1.16, Number(snap.panelContrast) || 1);
+  if (name === '3') {
+    // The lead study uses a restrained blue-white light field with real black
+    // between broader bands. This reads as an optical sculpture rather than a
+    // bright grey test card while retaining subtle chromatic separation.
+    snap.panelBrightness = 1.48;
+    snap.panelContrast = 1.36;
+    snap.panelHue = 0.63;
+    snap.panelSat = 0.34;
+    snap.patScale = 1.55;
+  }
+  applyPreset(snap);
+  state.currentPreset = name;
+  resetPortfolioCamera();
+  casingMat.color.setHex(0x090a0c);
+  casingMat.metalness = 0.88;
+  casingMat.roughness = 0.28;
+  casingMat.needsUpdate = true;
+  const studyLabel = document.getElementById('portfolioStudyLabel');
+  if (studyLabel) studyLabel.textContent = `0${name} / ${PORTFOLIO_STUDY_LABELS[name]}`;
+  setStatus(`portfolio · optical study ${name}`);
+  guiRefresh();
+}
+
+// Startup: prefer user-saved defaults in the studio. The portfolio opens on a
+// curated optical scene so the embedded canvas never resembles a blank panel.
 (function autoLoadDefaults() {
-  const saved = loadSavedDefaults();
-  if (saved) {
-    applyPreset(saved);
-    refreshPresetDropdown();
-    setStatus('loaded saved defaults');
-  } else {
-    const presets = loadPresets();
-    if (presets['4']) {
-      applyPreset(presets['4']);
-      state.currentPreset = '4';
+  if (!isPortfolioEmbed) {
+    const saved = loadSavedDefaults();
+    if (saved) {
+      applyPreset(saved);
       refreshPresetDropdown();
-      setStatus('loaded preset "4"');
+      setStatus('loaded saved defaults');
+    } else {
+      const presets = loadPresets();
+      if (presets['4']) {
+        applyPreset(presets['4']);
+        state.currentPreset = '4';
+        refreshPresetDropdown();
+        setStatus('loaded preset "4"');
+      }
     }
+  } else {
+    applyPortfolioPreset('3');
   }
 
-// ── Mobile preset bar — populate after init ──────────────────────────────
+// ── Compact preset bar ───────────────────────────────────────────────────
 (function initMobilePresetBar() {
   const bar = document.getElementById('mobilePresetBar');
   if (!bar) return;
+  if (isPortfolioEmbed) {
+    PORTFOLIO_PRESETS.forEach((name, index) => {
+      const btn = document.createElement('button');
+      btn.innerHTML = `<span class="preset-number">0${name}</span><span class="preset-label">${PORTFOLIO_STUDY_LABELS[name]}</span>`;
+      btn.setAttribute('aria-label', `Load optical study ${name}`);
+      btn.dataset.preset = name;
+      btn.addEventListener('pointerdown', () => {
+        beginUndoTransaction();
+        applyPortfolioPreset(name);
+        bar.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        commitUndoTransaction();
+      });
+      if (index === 2) btn.classList.add('active');
+      bar.appendChild(btn);
+    });
+    return;
+  }
   const presets = loadPresets();
   const names = Object.keys(presets);
   if (!names.length) return;
@@ -5659,12 +7052,14 @@ syncPresentationBtn();
     btn.addEventListener('pointerdown', () => {
       const p = loadPresets()[name];
       if (!p) return;
+      beginUndoTransaction();
       applyPreset(p);
       state.currentPreset = name;
       try { guiRefresh(); } catch(e) {}
       setStatus('loaded "' + name + '"');
       bar.querySelectorAll('button').forEach(b => { b.style.background='#111'; b.style.color='#ccc'; b.style.borderColor='#333'; });
       btn.style.background = '#444'; btn.style.color = '#fff'; btn.style.borderColor = '#666';
+      commitUndoTransaction();
     });
     bar.appendChild(btn);
   });
@@ -5702,6 +7097,49 @@ syncPresentationBtn();
   //  later in the file — running it here would hit a TDZ ReferenceError.
   //  See the queueMicrotask block near the bottom of the module.)
 })();
+
+(function initPortfolioExperience() {
+  if (!isPortfolioEmbed) return;
+  const exploreBtn = document.getElementById('portfolioExplore');
+  const resetBtn = document.getElementById('portfolioReset');
+
+  setPortfolioInteractive(false);
+  exploreBtn?.addEventListener('click', () => {
+    setPortfolioInteractive(!portfolioInteractive);
+  });
+  resetBtn?.addEventListener('click', resetPortfolioCamera);
+
+  // An embedded WebGL canvas should not hijack normal portfolio scrolling.
+  // Until the visitor deliberately enters Explore mode, pass wheel movement
+  // back to the parent page and keep OrbitControls disabled.
+  window.addEventListener('wheel', (event) => {
+    if (portfolioInteractive) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (window.parent !== window) {
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+      try {
+        window.parent.scrollBy({ top: event.deltaY * unit, left: 0, behavior: 'auto' });
+      } catch (_) {}
+    }
+  }, { passive: false, capture: true });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && portfolioInteractive) setPortfolioInteractive(false);
+  });
+
+  // Reveal only after the first complete WebGL frames, replacing the brief
+  // white/blank impression with an intentional calibration state.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => document.body.classList.add('portfolio-ready'));
+    });
+  });
+})();
+
+// Startup presets and user defaults establish the initial state. They should
+// not appear as an undoable edit when the app first opens.
+resetUndoHistoryBaseline();
 
 function syncLookResolution(w, h) {
   if (!lookPass) return;
@@ -5750,6 +7188,7 @@ function updateCameraMotion(dt) {
       const spinRad = state.lensSpin * Math.PI / 180 * dt;
       if (lensMesh) lensMesh.rotation.z += spinRad;
       if (lensMeshB) lensMeshB.rotation.z += spinRad;
+      if (lensMeshC) lensMeshC.rotation.z += spinRad;
     }
     return;
   }
@@ -5808,6 +7247,7 @@ function updateCameraMotion(dt) {
     const spinRad = state.lensSpin * Math.PI / 180 * dt;
     if (lensMesh) lensMesh.rotation.z += spinRad;
     if (lensMeshB) lensMeshB.rotation.z += spinRad;
+    if (lensMeshC) lensMeshC.rotation.z += spinRad;
   }
 }
 
@@ -6296,10 +7736,11 @@ function applyShapeView(on, options = {}) {
   // Swap lens materials and hide the LED panel while shape view is active.
   if (lensMesh)  lensMesh.material  = next ? shapeViewMaterial : lensMaterial;
   if (lensMeshB) lensMeshB.material = next ? shapeViewMaterial : lensMaterialB;
+  if (lensMeshC) lensMeshC.material = next ? shapeViewMaterial : lensMaterialC;
   if (ledPanel)  ledPanel.visible   = !next && state.lensType !== 'logo';
-  if (ledPanelB) ledPanelB.visible  = !next && state.compare;
+  if (ledPanelB) ledPanelB.visible  = !next && (state.compare || isRearSurfaceComparisonActive());
   if (ledCasing)  ledCasing.visible  = !next && state.lensType !== 'logo';
-  if (ledCasingB) ledCasingB.visible = !next && state.compare;
+  if (ledCasingB) ledCasingB.visible = !next && (state.compare || isRearSurfaceComparisonActive());
   // Lift the flat background in shape view, then restore the real wall material
   // on exit. Textured wall presets need applyWallMaterial(); simply setting the
   // material colour would leave the gallery wall flattened for live/export.
@@ -6342,6 +7783,7 @@ function applyLensHidden(hidden) {
   const show = !hidden;
   if (lensMesh)  lensMesh.visible  = show;
   if (lensMeshB) lensMeshB.visible = show;
+  if (lensMeshC) lensMeshC.visible = show;
   if (lensHideBtnCtrl) {
     lensHideBtnCtrl.name(hidden ? '✓ lens hidden — click to restore' : '👁 hide lens');
     guiRefresh();
@@ -7407,6 +8849,18 @@ function setUIHidden(hide) {
 window.addEventListener('keydown', (e) => {
   const ae = document.activeElement;
   if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+  const commandKey = e.metaKey || e.ctrlKey;
+  if (commandKey && !e.altKey && e.key.toLowerCase() === 'z') {
+    if (e.shiftKey) redoAppState();
+    else undoAppState();
+    e.preventDefault();
+    return;
+  }
+  if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'y') {
+    redoAppState();
+    e.preventDefault();
+    return;
+  }
   // Shift+1..9 jumps to shot N in the sequence (no transition, pure snap).
   // Checked BEFORE the meta/ctrl/alt guard so shift-combos work, and BEFORE the
   // digit-only preset check so it wins over preset loading.
@@ -7432,8 +8886,10 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
   }
   else if (k === 'b' || k === 'B') {
+    beginUndoTransaction();
     state.bloomEnabled = !state.bloomEnabled;
     syncBloom(); guiRefresh();
+    commitUndoTransaction();
     setStatus(`bloom ${state.bloomEnabled ? 'on' : 'off'}`);
     e.preventDefault();
   }
@@ -7445,16 +8901,21 @@ window.addEventListener('keydown', (e) => {
   }
   else if (/^[0-9]$/.test(k)) {
     const p = loadPresets()[k];
-    if (p) { applyPreset(p); state.currentPreset = k; refreshPresetDropdown(); guiRefresh(); setStatus(`loaded preset "${k}"`); }
+    if (p) {
+      beginUndoTransaction();
+      applyPreset(p); state.currentPreset = k; refreshPresetDropdown(); guiRefresh();
+      commitUndoTransaction();
+      setStatus(`loaded preset "${k}"`);
+    }
   }
 });
 
 window.__prismatica = {
   state, rebuildLenses, scene, camera, renderer, controls,
   ledMat, ledMatB, lensMaterial, lensMaterialB, LENS_TYPES,
-  applyShapeView, activeLensResolution,
+  applyShapeView, activeLensResolution, setRearSurfaceComparison, isRearSurfaceComparisonActive,
   lensVertexCount: () => lensMesh?.geometry?.attributes?.position?.count || 0,
-  applyPreset, guiRefresh, renderOffline, renderInDedicatedChrome, renderStateSnapshot,
+  applyPreset, guiRefresh, undoAppState, redoAppState, renderOffline, renderInDedicatedChrome, renderStateSnapshot,
   addShotToSequence, removeShotFromSequence, replaceShotInSequence,
   loadShotPose, clearShotSequence, moveShotInSequence,
   playSequencePreview, stopSequencePreview,

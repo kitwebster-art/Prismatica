@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Prismatica Surface Studio</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<style>
+  :root { color-scheme: dark; --ink:#f4f1ea; --muted:#8a8b91; --line:rgba(255,255,255,.12); --panel:rgba(11,11,13,.88); --acid:#d8ff3e; --violet:#9172ff; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; width:100%; height:100%; overflow:hidden; background:#09090a; color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif; }
+  button,input,select { font:inherit; }
+  #stage { position:fixed; inset:0; }
+  canvas { display:block; }
+  .topbar { position:fixed; z-index:20; top:0; left:0; right:0; height:66px; display:flex; align-items:center; justify-content:space-between; padding:0 22px; border-bottom:1px solid var(--line); background:linear-gradient(180deg,rgba(7,7,8,.92),rgba(7,7,8,.42)); backdrop-filter:blur(18px); }
+  .brand { display:flex; align-items:center; gap:13px; min-width:250px; }
+  .mark { width:25px; height:25px; border:1px solid rgba(255,255,255,.75); border-radius:50%; position:relative; }
+  .mark:before,.mark:after { content:""; position:absolute; border-radius:50%; border:1px solid rgba(216,255,62,.8); }
+  .mark:before { inset:4px -4px 4px 4px; } .mark:after { inset:8px 5px 8px -5px; border-color:#ff4dc8; }
+  .brand strong { display:block; font-size:12px; letter-spacing:.18em; font-weight:650; }
+  .brand small { display:block; margin-top:3px; color:var(--muted); font:9px/1.1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.1em; text-transform:uppercase; }
+  .dimensions { color:#b8b8bc; font:10px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.12em; text-transform:uppercase; }
+  .actions { display:flex; align-items:center; gap:8px; }
+  .btn { appearance:none; border:1px solid var(--line); border-radius:999px; background:rgba(22,22,25,.8); color:#d9d9dc; height:34px; padding:0 14px; cursor:pointer; font-size:10px; font-weight:650; letter-spacing:.1em; text-transform:uppercase; transition:.18s ease; }
+  .btn:hover { color:white; border-color:rgba(255,255,255,.35); transform:translateY(-1px); }
+  .btn.primary { color:#111; background:var(--acid); border-color:var(--acid); }
+  .btn.recording { background:#ff4c65; border-color:#ff4c65; color:#160306; }
+  .side { position:fixed; z-index:15; top:82px; bottom:20px; width:294px; border:1px solid var(--line); background:var(--panel); backdrop-filter:blur(24px); border-radius:16px; box-shadow:0 20px 80px rgba(0,0,0,.35); overflow:hidden; }
+  .side.left { left:18px; } .side.right { right:18px; }
+  .panel-scroll { height:100%; overflow:auto; padding:16px; scrollbar-width:thin; scrollbar-color:#444 transparent; }
+  .section { padding:0 0 16px; margin:0 0 16px; border-bottom:1px solid var(--line); }
+  .section:last-child { border-bottom:0; }
+  .section-title { display:flex; align-items:center; justify-content:space-between; margin:0 0 13px; color:#d8d8da; font-size:9px; font-weight:700; letter-spacing:.18em; text-transform:uppercase; }
+  .section-title span { color:#57585f; font:9px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:0; }
+  .field { margin:0 0 11px; }
+  .label { display:flex; justify-content:space-between; align-items:center; margin:0 0 6px; color:#8f9096; font-size:10px; }
+  .label output { color:#e3e3e5; font:10px ui-monospace,SFMono-Regular,Menlo,monospace; }
+  input[type="range"] { appearance:none; width:100%; height:3px; border-radius:2px; background:#303035; outline:none; }
+  input[type="range"]::-webkit-slider-thumb { appearance:none; width:12px; height:12px; border-radius:50%; background:#e8e8e9; border:3px solid #101012; box-shadow:0 0 0 1px #777; cursor:pointer; }
+  select { width:100%; height:34px; padding:0 9px; color:#ddd; background:#17171a; border:1px solid var(--line); border-radius:7px; outline:none; font-size:10px; }
+  .preset-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+  .preset { appearance:none; min-height:50px; padding:8px; text-align:left; color:#bbb; border:1px solid var(--line); border-radius:9px; background:#151518; cursor:pointer; font-size:9px; letter-spacing:.08em; text-transform:uppercase; }
+  .preset i { display:block; width:100%; height:12px; margin-bottom:8px; border-radius:3px; opacity:.85; }
+  .preset:nth-child(1) i { background:linear-gradient(100deg,#101014,#ff31d2,#5b4dff,#20e6ff); }
+  .preset:nth-child(2) i { background:repeating-linear-gradient(120deg,#222 0 4px,#edff3d 4px 6px,#ff734b 6px 9px); }
+  .preset:nth-child(3) i { background:radial-gradient(circle at 30%,#fff,#ff56d8 12%,#472dff 35%,#050508 65%); }
+  .preset:nth-child(4) i { background:linear-gradient(90deg,#fff,#43ffbd,#4168ff,#fff); }
+  .preset.active { color:white; border-color:rgba(216,255,62,.6); box-shadow:inset 0 0 0 1px rgba(216,255,62,.15); }
+  .camera-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:5px; }
+  .cam { appearance:none; height:30px; border:1px solid var(--line); border-radius:6px; background:#161619; color:#aaa; font-size:9px; cursor:pointer; }
+  .cam:hover { color:white; border-color:#666; }
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; min-height:28px; color:#999; font-size:10px; }
+  .toggle { position:relative; width:33px; height:18px; border-radius:999px; background:#2b2b2f; cursor:pointer; border:0; }
+  .toggle:before { content:""; position:absolute; width:12px; height:12px; left:3px; top:3px; border-radius:50%; background:#999; transition:.18s; }
+  .toggle.on { background:var(--acid); } .toggle.on:before { transform:translateX(15px); background:#111; }
+  .zone-tabs { display:grid; grid-template-columns:repeat(3,1fr); gap:5px; margin-bottom:11px; }
+  .zone-tab { height:29px; border:1px solid var(--line); border-radius:6px; background:#17171a; color:#888; cursor:pointer; font-size:9px; }
+  .zone-tab.active { color:#111; background:#e8e8e9; border-color:#e8e8e9; }
+  .zone-dot { display:inline-block; width:6px; height:6px; margin-right:5px; border-radius:50%; background:#ff51cf; }
+  .zone-tab:nth-child(2) .zone-dot { background:#4feeff; } .zone-tab:nth-child(3) .zone-dot { background:#e8ff43; }
+  .bottom-info { position:fixed; z-index:12; left:330px; right:330px; bottom:19px; display:flex; align-items:flex-end; justify-content:space-between; pointer-events:none; }
+  .surface-readout { padding:11px 13px; border:1px solid var(--line); border-radius:10px; background:rgba(10,10,12,.67); backdrop-filter:blur(14px); font:9px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; color:#85868b; text-transform:uppercase; letter-spacing:.09em; }
+  .surface-readout b { color:#e8e8ea; font-weight:500; }
+  .help { color:#85868b; font-size:9px; letter-spacing:.08em; text-transform:uppercase; text-shadow:0 1px 4px #000; }
+  .toast { position:fixed; z-index:50; left:50%; bottom:74px; transform:translate(-50%,20px); opacity:0; pointer-events:none; padding:11px 16px; border:1px solid rgba(255,255,255,.16); border-radius:999px; background:rgba(12,12,14,.92); color:#ddd; font-size:10px; letter-spacing:.08em; transition:.25s ease; }
+  .toast.on { opacity:1; transform:translate(-50%,0); }
+  .render-overlay { display:none; position:fixed; z-index:100; inset:0; place-items:center; background:rgba(5,5,6,.88); backdrop-filter:blur(24px); }
+  .render-overlay.on { display:grid; }
+  .render-card { width:min(430px,calc(100vw - 40px)); padding:30px; border:1px solid var(--line); border-radius:18px; background:#101012; text-align:center; }
+  .render-card .pulse { width:60px; height:60px; margin:0 auto 18px; border:1px solid var(--acid); border-radius:50%; box-shadow:0 0 40px rgba(216,255,62,.12); animation:pulse 1.4s infinite ease-in-out; }
+  .render-card h2 { margin:0 0 7px; font-size:15px; letter-spacing:.14em; text-transform:uppercase; }
+  .render-card p { margin:0; color:#777; font-size:11px; }
+  @keyframes pulse { 50% { transform:scale(.76); opacity:.3; } }
+  @media (max-width:1000px) { .side { width:250px; } .bottom-info { left:280px; right:280px; } .dimensions { display:none; } }
+  @media (max-width:760px) { .side { top:auto; bottom:10px; height:38vh; width:calc(50% - 15px); } .side.left{left:10px}.side.right{right:10px} .topbar{padding:0 10px}.brand{min-width:0}.brand small,.actions .secondary{display:none}.bottom-info{display:none} }
+</style>
+</head>
+<body>
+<div id="stage" aria-label="Interactive 3D projection mapped wall sculpture"></div>
+<header class="topbar">
+  <div class="brand"><span class="mark"></span><div><strong>PRISMATICA</strong><small>Surface Studio / 01</small></div></div>
+  <div class="dimensions">1200 × 1200 mm / relief 100–200 mm / mapped surface</div>
+  <div class="actions">
+    <button class="btn secondary" id="savePreset">Save setup</button>
+    <button class="btn secondary" id="shot">Save still</button>
+    <button class="btn primary" id="record">● Render MP4</button>
+  </div>
+</header>
+
+<aside class="side left"><div class="panel-scroll">
+  <section class="section">
+    <div class="section-title">Surface generator <span id="seedLabel">SEED 4821</span></div>
+    <div class="preset-grid">
+      <button class="preset active" data-preset="fluid"><i></i>Fluid folds</button>
+      <button class="preset" data-preset="strata"><i></i>Angular strata</button>
+      <button class="preset" data-preset="bloom"><i></i>Radial bloom</button>
+      <button class="preset" data-preset="fabric"><i></i>Soft fabric</button>
+    </div>
+    <button class="btn primary" id="randomize" style="width:100%;margin-top:9px">↻ Generate new surface</button>
+  </section>
+  <section class="section" id="surfaceControls"><div class="section-title">Sculpture geometry <span>MM</span></div></section>
+  <section class="section">
+    <div class="section-title">Physical surface</div>
+    <div class="field"><div class="label"><span>Material finish</span></div><select id="finish"><option value="0">White matte print</option><option value="1">Pearlescent resin</option><option value="2">Translucent polymer</option><option value="3">Mineral composite</option></select></div>
+    <div class="toggle-row"><span>Black contour drawing</span><button class="toggle on" data-toggle="contours"></button></div>
+    <div id="lineControls"></div>
+  </section>
+  <section class="section">
+    <div class="section-title">Camera rig</div>
+    <div class="camera-grid"><button class="cam" data-cam="front">Front</button><button class="cam" data-cam="left">Left</button><button class="cam" data-cam="right">Right</button><button class="cam" data-cam="detail">Detail</button></div>
+    <div class="toggle-row" style="margin-top:8px"><span>Cinematic orbit</span><button class="toggle on" data-toggle="orbit"></button></div>
+    <div id="cameraControls"></div>
+  </section>
+</div></aside>
+
+<aside class="side right"><div class="panel-scroll">
+  <section class="section">
+    <div class="section-title">Projection engine <span>LIVE</span></div>
+    <div class="preset-grid">
+      <button class="preset active" data-look="0"><i></i>Hyperfluid</button>
+      <button class="preset" data-look="1"><i></i>Chromatic scan</button>
+      <button class="preset" data-look="2"><i></i>Orbital field</button>
+      <button class="preset" data-look="3"><i></i>Prismatic veil</button>
+    </div>
+    <div class="toggle-row" style="margin-top:8px"><span>Projection enabled</span><button class="toggle on" data-toggle="projection"></button></div>
+  </section>
+  <section class="section"><div class="section-title">Shader character</div><div id="shaderControls"></div></section>
+  <section class="section">
+    <div class="section-title">Mapping zones <span>3 LAYERS</span></div>
+    <div class="zone-tabs"><button class="zone-tab active" data-zone="0"><span class="zone-dot"></span>A</button><button class="zone-tab" data-zone="1"><span class="zone-dot"></span>B</button><button class="zone-tab" data-zone="2"><span class="zone-dot"></span>C</button></div>
+    <div class="field"><div class="label"><span>Zone content</span></div><select id="zoneContent"><option value="0">Fluid gradient</option><option value="1">Prismatic bands</option><option value="2">Orbital rings</option><option value="3">Kaleidoscope</option><option value="4">Electric contour</option></select></div>
+    <div id="zoneControls"></div>
+    <div class="toggle-row"><span>Show mapping guides</span><button class="toggle" data-toggle="guides"></button></div>
+  </section>
+  <section class="section"><div class="section-title">Environment</div><div id="environmentControls"></div><div class="toggle-row"><span>Red brick wall</span><button class="toggle on" data-toggle="brick"></button></div></section>
+</div></aside>
+
+<div class="bottom-info"><div class="surface-readout">SURFACE <b id="readoutPreset">FLUID FOLDS</b><br>PEAK RELIEF <b id="readoutDepth">176 MM</b> / MESH <b>19.9K</b></div><div class="help">drag to orbit · scroll to dolly · right drag to pan</div></div>
+<div class="toast" id="toast"></div>
+<div class="render-overlay" id="renderOverlay"><div class="render-card"><div class="pulse"></div><h2 id="renderTitle">Recording movement</h2><p id="renderStatus">Capturing 8 seconds, keep this window open.</p></div></div>
+
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.170.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.170.0/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const state = {
+  seed:4821, preset:'fluid', amplitude:176, waveScale:3.8, secondary:6.2, turbulence:0.48, angularity:0.18, skew:0.22, centerBias:0.35,
+  contourOn:true, lineWidth:.16, lineOpacity:.82, lineDensity:11, finish:0,
+  projectionOn:true, look:0, speed:.28, scale:1.15, saturation:1.32, contrast:1.18, brightness:1.08, hue:0, iridescence:.52, bloom:.72,
+  orbit:true, orbitSpeed:.075, orbitArc:38, cameraFov:38,
+  guides:false, brick:true, brickLight:.65, wallDepth:118,
+  zones:[
+    {x:.35,y:.55,size:.66,feather:.28,rotation:-18,intensity:1,content:0},
+    {x:.68,y:.34,size:.48,feather:.34,rotation:24,intensity:.85,content:2},
+    {x:.66,y:.76,size:.38,feather:.42,rotation:-5,intensity:.72,content:1}
+  ]
+};
+
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true,powerPreference:'high-performance'});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.75)); renderer.setSize(innerWidth,innerHeight); renderer.outputColorSpace=THREE.SRGBColorSpace; renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=1.05; renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap; stage.appendChild(renderer.domElement);
+const scene=new THREE.Scene(); scene.background=new THREE.Color(0x08080a); scene.fog=new THREE.FogExp2(0x08080a,.00034);
+const camera=new THREE.PerspectiveCamera(state.cameraFov,innerWidth/innerHeight,1,7000); camera.position.set(280,110,1840);
+const controls=new OrbitControls(camera,renderer.domElement); controls.enableDamping=true; controls.dampingFactor=.055; controls.target.set(0,0,55); controls.minDistance=580; controls.maxDistance=3300; controls.maxPolarAngle=Math.PI*.78;
+const composer=new EffectComposer(renderer); composer.addPass(new RenderPass(scene,camera)); const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight),state.bloom,.56,.7); composer.addPass(bloom); composer.addPass(new OutputPass());
+
+const vShader=`
+  uniform float uTime,uSeed,uAmp,uScale,uSecondary,uTurb,uAngular,uSkew,uCenter;
+  varying vec2 vUv; varying vec3 vWorld; varying float vH; varying vec3 vLocal;
+  float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7))+uSeed)*43758.5453123);}
+  float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1)),f.x),f.y);}
+  float fbm(vec2 p){float v=0.,a=.5;mat2 r=mat2(.80,.60,-.60,.80);for(int i=0;i<5;i++){v+=a*noise(p);p=r*p*2.04+uSeed*.013;a*=.5;}return v;}
+  float surface(vec2 q){
+    vec2 p=q*2.-1.; p.x+=p.y*uSkew; float a=sin((p.x*.84+p.y*.42)*uScale*3.1416+fbm(p*2.2)*uTurb*5.);
+    float b=sin((p.y*.9-p.x*.25)*uSecondary*3.1416+uSeed*.01);
+    float radial=sin(length(p-vec2(.14,-.08))*uScale*7.-atan(p.y,p.x)*1.6);
+    float folds=mix(a*.64+b*.22,radial*.7+a*.3,uCenter);
+    folds=mix(folds,sign(folds)*pow(abs(folds),.45),uAngular);
+    float detail=(fbm(p*5.2+uSeed*.001)-.5)*uTurb*.6;
+    float edge=smoothstep(1.28,.68,max(abs(p.x),abs(p.y)));
+    return (folds*.5+.5+detail)*edge;
+  }
+  void main(){vUv=uv;vH=surface(uv);vec3 p=position;p.z=vH*uAmp;vLocal=p;vec4 w=modelMatrix*vec4(p,1.);vWorld=w.xyz;gl_Position=projectionMatrix*viewMatrix*w;}
+`;
+const fShader=`
+  precision highp float;
+  uniform float uTime,uLineWidth,uLineOpacity,uLineDensity,uProjection,uSpeed,uMapScale,uSat,uContrast,uBrightness,uHue,uIri,uFinish,uGuides;
+  uniform vec3 uZoneA,uZoneB,uZoneC; uniform vec3 uZoneExtraA,uZoneExtraB,uZoneExtraC; uniform float uZoneModeA,uZoneModeB,uZoneModeC;
+  varying vec2 vUv; varying vec3 vWorld; varying float vH; varying vec3 vLocal;
+  vec3 hsv2rgb(vec3 c){vec3 p=abs(fract(c.xxx+vec3(0.,2./3.,1./3.))*6.-3.);return c.z*mix(vec3(1.),clamp(p-1.,0.,1.),c.y);}
+  vec3 pattern(vec2 p,float mode,float phase){
+    float v;if(mode<.5){v=sin(p.x*8.+sin(p.y*11.+phase)*2.+phase)+sin(length(p)*12.-phase*1.7);}
+    else if(mode<1.5){v=sin((p.x+p.y*.42)*22.+phase*2.);}
+    else if(mode<2.5){v=sin(length(p-vec2(.15))*24.-phase*2.5);}
+    else if(mode<3.5){float a=atan(p.y,p.x);v=sin(length(p)*22.+abs(sin(a*5.))*8.-phase);}
+    else {v=sin((p.x*1.4+p.y)*17.+vH*28.-phase*2.);}
+    float hue=fract(v*.12+phase*.035+length(p)*.18+uHue);return hsv2rgb(vec3(hue,.94,.95));
+  }
+  vec4 zone(vec2 uv,vec3 z,vec3 ex,float mode,float phase){vec2 p=uv-z.xy;p=mat2(cos(ex.y),-sin(ex.y),sin(ex.y),cos(ex.y))*p/max(.05,z.z);float d=length(p);float mask=1.-smoothstep(1.-ex.x,1.,d);vec3 c=pattern(p*uMapScale,mode,phase)*ex.z;float guide=smoothstep(.018,0.,abs(d-1.))*uGuides;c=mix(c,vec3(1.),guide);return vec4(c,max(mask,guide));}
+  void main(){
+    vec3 dx=dFdx(vWorld),dy=dFdy(vWorld);vec3 n=normalize(cross(dx,dy));if(!gl_FrontFacing)n=-n;
+    vec3 viewDir=normalize(cameraPosition-vWorld);vec3 lightDir=normalize(vec3(-.45,.72,.75));float diff=max(dot(n,lightDir),0.);float rim=pow(1.-max(dot(n,viewDir),0.),2.2);float spec=pow(max(dot(reflect(-lightDir,n),viewDir),0.),mix(24.,95.,uFinish/3.));
+    vec3 base=mix(vec3(.76,.77,.78),vec3(.98),diff*.72)+spec*(.12+uFinish*.08)+rim*.16*uIri;
+    float phase=uTime*uSpeed;vec4 a=zone(vUv,uZoneA,uZoneExtraA,uZoneModeA,phase);vec4 b=zone(vUv,uZoneB,uZoneExtraB,uZoneModeB,phase+2.1);vec4 c=zone(vUv,uZoneC,uZoneExtraC,uZoneModeC,phase+4.6);
+    float total=min(1.,a.a+b.a+c.a);vec3 mapped=(a.rgb*a.a+b.rgb*b.a+c.rgb*c.a)/max(.001,a.a+b.a+c.a);mapped=(mapped-.5)*uContrast+.5;mapped*=uBrightness;float l=dot(mapped,vec3(.2126,.7152,.0722));mapped=mix(vec3(l),mapped,uSat);
+    vec3 col=mix(base,mapped,total*uProjection*.92);float contour=1.-smoothstep(uLineWidth,uLineWidth+fwidth(vH*uLineDensity)*1.4,abs(fract(vH*uLineDensity)-.5));col=mix(col,vec3(.008),contour*uLineOpacity);
+    float vign=smoothstep(1.5,.56,length(vUv-.5));col*=mix(.72,1.,vign);gl_FragColor=vec4(col,1.);
+  }
+`;
+const uniforms={
+  uTime:{value:0},uSeed:{value:state.seed},uAmp:{value:state.amplitude},uScale:{value:state.waveScale},uSecondary:{value:state.secondary},uTurb:{value:state.turbulence},uAngular:{value:state.angularity},uSkew:{value:state.skew},uCenter:{value:state.centerBias},
+  uLineWidth:{value:state.lineWidth},uLineOpacity:{value:state.lineOpacity},uLineDensity:{value:state.lineDensity},uProjection:{value:1},uSpeed:{value:state.speed},uMapScale:{value:state.scale},uSat:{value:state.saturation},uContrast:{value:state.contrast},uBrightness:{value:state.brightness},uHue:{value:state.hue},uIri:{value:state.iridescence},uFinish:{value:0},uGuides:{value:0},
+  uZoneA:{value:new THREE.Vector3()},uZoneB:{value:new THREE.Vector3()},uZoneC:{value:new THREE.Vector3()},uZoneExtraA:{value:new THREE.Vector3()},uZoneExtraB:{value:new THREE.Vector3()},uZoneExtraC:{value:new THREE.Vector3()},uZoneModeA:{value:0},uZoneModeB:{value:2},uZoneModeC:{value:1}
+};
+const sculptureGeo=new THREE.PlaneGeometry(1200,1200,140,140); const sculptureMat=new THREE.ShaderMaterial({uniforms,vertexShader:vShader,fragmentShader:fShader,side:THREE.DoubleSide,extensions:{derivatives:true}}); const sculpture=new THREE.Mesh(sculptureGeo,sculptureMat); sculpture.castShadow=true; scene.add(sculpture);
+const backing=new THREE.Mesh(new THREE.BoxGeometry(1218,1218,34),new THREE.MeshStandardMaterial({color:0xe7e4dc,roughness:.82,metalness:0}));backing.position.z=-14;backing.receiveShadow=true;scene.add(backing);
+
+const brickMat=new THREE.ShaderMaterial({uniforms:{uLight:{value:state.brickLight}},vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,fragmentShader:`varying vec2 vUv;uniform float uLight;float h(vec2 p){return fract(sin(dot(p,vec2(17.17,73.31)))*43758.54);}void main(){vec2 q=vUv*vec2(14.,8.);float row=floor(q.y);q.x+=mod(row,2.)*.5;vec2 id=floor(q);vec2 f=fract(q);float mortar=smoothstep(.035,.065,min(min(f.x,1.-f.x),min(f.y,1.-f.y)));float n=h(id);vec3 brick=mix(vec3(.18,.035,.018),vec3(.52,.12,.055),n*.78+.14);brick*=.7+.3*sin(f.y*3.1416);vec3 col=mix(vec3(.45,.41,.35),brick,mortar);float vign=1.-length(vUv-.5)*.28;gl_FragColor=vec4(col*vign*(.55+uLight*.65),1.);}`});
+const wall=new THREE.Mesh(new THREE.PlaneGeometry(5200,3200),brickMat);wall.position.z=-state.wallDepth;wall.receiveShadow=true;scene.add(wall);
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(5200,3000),new THREE.MeshStandardMaterial({color:0x111112,roughness:.92}));floor.rotation.x=-Math.PI/2;floor.position.y=-1060;floor.position.z=400;floor.receiveShadow=true;scene.add(floor);
+const hemi=new THREE.HemisphereLight(0xdde7ff,0x25120d,1.9);scene.add(hemi);const key=new THREE.DirectionalLight(0xffffff,3.1);key.position.set(-900,1200,1600);key.castShadow=true;key.shadow.mapSize.set(2048,2048);scene.add(key);const magenta=new THREE.PointLight(0xff3fb7,7,1500);magenta.position.set(-700,300,500);scene.add(magenta);const cyan=new THREE.PointLight(0x25dfff,6,1400);cyan.position.set(700,-200,600);scene.add(cyan);
+
+function syncZones(){state.zones.forEach((z,i)=>{uniforms[['uZoneA','uZoneB','uZoneC'][i]].value.set(z.x,z.y,z.size);uniforms[['uZoneExtraA','uZoneExtraB','uZoneExtraC'][i]].value.set(z.feather,z.rotation*Math.PI/180,z.intensity);uniforms[['uZoneModeA','uZoneModeB','uZoneModeC'][i]].value=z.content;});}
+function sync(){uniforms.uSeed.value=state.seed;uniforms.uAmp.value=state.amplitude;uniforms.uScale.value=state.waveScale;uniforms.uSecondary.value=state.secondary;uniforms.uTurb.value=state.turbulence;uniforms.uAngular.value=state.angularity;uniforms.uSkew.value=state.skew;uniforms.uCenter.value=state.centerBias;uniforms.uLineWidth.value=state.lineWidth;uniforms.uLineOpacity.value=state.contourOn?state.lineOpacity:0;uniforms.uLineDensity.value=state.lineDensity;uniforms.uProjection.value=state.projectionOn?1:0;uniforms.uSpeed.value=state.speed;uniforms.uMapScale.value=state.scale;uniforms.uSat.value=state.saturation;uniforms.uContrast.value=state.contrast;uniforms.uBrightness.value=state.brightness;uniforms.uHue.value=state.hue;uniforms.uIri.value=state.iridescence;uniforms.uFinish.value=state.finish;uniforms.uGuides.value=state.guides?1:0;bloom.strength=state.bloom;camera.fov=state.cameraFov;camera.updateProjectionMatrix();brickMat.uniforms.uLight.value=state.brickLight;wall.visible=state.brick;wall.position.z=-state.wallDepth;document.getElementById('readoutDepth').textContent=Math.round(state.amplitude)+' MM';document.getElementById('seedLabel').textContent='SEED '+state.seed;syncZones();}
+
+function slider(parent,key,label,min,max,step,format=v=>Number(v).toFixed(step<1?2:0),onInput=sync){const wrap=document.createElement('div');wrap.className='field';const lab=document.createElement('div');lab.className='label';lab.innerHTML=`<span>${label}</span><output>${format(state[key])}</output>`;const input=document.createElement('input');input.type='range';input.min=min;input.max=max;input.step=step;input.value=state[key];input.addEventListener('input',()=>{state[key]=Number(input.value);lab.querySelector('output').textContent=format(state[key]);onInput();});wrap.append(lab,input);parent.appendChild(wrap);return{input,output:lab.querySelector('output')};}
+function zoneSlider(parent,key,label,min,max,step,format=v=>Number(v).toFixed(2)){const wrap=document.createElement('div');wrap.className='field';const lab=document.createElement('div');lab.className='label';const z=state.zones[activeZone];lab.innerHTML=`<span>${label}</span><output>${format(z[key])}</output>`;const input=document.createElement('input');input.type='range';input.min=min;input.max=max;input.step=step;input.value=z[key];input.dataset.zoneKey=key;input.addEventListener('input',()=>{state.zones[activeZone][key]=Number(input.value);lab.querySelector('output').textContent=format(Number(input.value));sync();});wrap.append(lab,input);parent.appendChild(wrap);}
+const sc=document.getElementById('surfaceControls');slider(sc,'amplitude','Peak relief',100,200,1,v=>Math.round(v)+' mm');slider(sc,'waveScale','Primary wave scale',1.5,8,.05);slider(sc,'secondary','Secondary folds',2,12,.1);slider(sc,'turbulence','Fluid turbulence',0,1.2,.01);slider(sc,'angularity','Angular ridges',0,1,.01);slider(sc,'skew','Directional skew',-.8,.8,.01);slider(sc,'centerBias','Radial influence',0,1,.01);
+const lc=document.getElementById('lineControls');slider(lc,'lineDensity','Contour spacing',4,24,.1,v=>v.toFixed(1));slider(lc,'lineWidth','Line weight',.03,.34,.005,v=>v.toFixed(3));slider(lc,'lineOpacity','Black intensity',0,1,.01,v=>Math.round(v*100)+'%');
+const cc=document.getElementById('cameraControls');slider(cc,'cameraFov','Lens / field of view',22,65,1,v=>Math.round(v)+'°');slider(cc,'orbitSpeed','Orbit speed',.01,.2,.005);slider(cc,'orbitArc','Orbit arc',8,85,1,v=>Math.round(v)+'°');
+const sh=document.getElementById('shaderControls');slider(sh,'speed','Animation speed',0,1.5,.01);slider(sh,'scale','Content scale',.25,4,.01);slider(sh,'saturation','Colour saturation',0,2,.01);slider(sh,'contrast','Contrast',.5,2,.01);slider(sh,'brightness','Brightness',.25,1.75,.01);slider(sh,'hue','Hue shift',0,1,.005);slider(sh,'iridescence','Edge iridescence',0,1.5,.01);slider(sh,'bloom','Light bloom',0,2,.01);
+const ec=document.getElementById('environmentControls');slider(ec,'brickLight','Brick exposure',.1,1.4,.01);slider(ec,'wallDepth','Wall clearance',70,240,1,v=>Math.round(v)+' mm');
+let activeZone=0;function rebuildZoneControls(){const el=document.getElementById('zoneControls');el.innerHTML='';zoneSlider(el,'x','Horizontal position',0,1,.005);zoneSlider(el,'y','Vertical position',0,1,.005);zoneSlider(el,'size','Zone size',.12,1.2,.01);zoneSlider(el,'feather','Edge feather',.02,.8,.01);zoneSlider(el,'rotation','Rotation',-180,180,1,v=>Math.round(v)+'°');zoneSlider(el,'intensity','Intensity',0,1.5,.01);document.getElementById('zoneContent').value=state.zones[activeZone].content;}rebuildZoneControls();
+
+const PRESETS={fluid:{amplitude:176,waveScale:3.8,secondary:6.2,turbulence:.48,angularity:.18,skew:.22,centerBias:.35},strata:{amplitude:148,waveScale:5.6,secondary:9.1,turbulence:.18,angularity:.86,skew:.58,centerBias:.06},bloom:{amplitude:194,waveScale:4.4,secondary:4.8,turbulence:.36,angularity:.4,skew:-.08,centerBias:.94},fabric:{amplitude:124,waveScale:2.7,secondary:7.4,turbulence:.72,angularity:.03,skew:-.34,centerBias:.22}};
+function applyPreset(name){Object.assign(state,PRESETS[name]);state.preset=name;document.querySelectorAll('[data-preset]').forEach(b=>b.classList.toggle('active',b.dataset.preset===name));document.getElementById('readoutPreset').textContent=name.replace(/_/g,' ').toUpperCase();rebuildAllSliderValues();sync();toast(name.replace(/^./,x=>x.toUpperCase())+' surface loaded');}
+function rebuildAllSliderValues(){document.querySelectorAll('input[type=range]').forEach(i=>{const label=i.previousElementSibling?.querySelector('span')?.textContent;const map={'Peak relief':'amplitude','Primary wave scale':'waveScale','Secondary folds':'secondary','Fluid turbulence':'turbulence','Angular ridges':'angularity','Directional skew':'skew','Radial influence':'centerBias','Contour spacing':'lineDensity','Line weight':'lineWidth','Black intensity':'lineOpacity','Lens / field of view':'cameraFov','Orbit speed':'orbitSpeed','Orbit arc':'orbitArc','Animation speed':'speed','Content scale':'scale','Colour saturation':'saturation','Contrast':'contrast','Brightness':'brightness','Hue shift':'hue','Edge iridescence':'iridescence','Light bloom':'bloom','Brick exposure':'brickLight','Wall clearance':'wallDepth'};const key=map[label];if(key){i.value=state[key];i.dispatchEvent(new Event('input'));}});}
+document.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>applyPreset(b.dataset.preset));
+document.getElementById('randomize').onclick=()=>{state.seed=Math.floor(1000+Math.random()*8999);state.amplitude=120+Math.random()*80;state.waveScale=2+Math.random()*5.5;state.secondary=3+Math.random()*8;state.turbulence=.15+Math.random()*.95;state.angularity=Math.random()*.82;state.skew=-.65+Math.random()*1.3;state.centerBias=Math.random();state.preset='generated';document.querySelectorAll('[data-preset]').forEach(b=>b.classList.remove('active'));document.getElementById('readoutPreset').textContent='GENERATED '+state.seed;rebuildAllSliderValues();sync();toast('New surface generated');};
+document.querySelectorAll('[data-look]').forEach(b=>b.onclick=()=>{state.look=Number(b.dataset.look);document.querySelectorAll('[data-look]').forEach(x=>x.classList.toggle('active',x===b));const modes=[[0,2,1],[1,4,3],[2,3,0],[3,0,4]][state.look];state.zones.forEach((z,i)=>z.content=modes[i]);rebuildZoneControls();sync();});
+document.querySelectorAll('.zone-tab').forEach(b=>b.onclick=()=>{activeZone=Number(b.dataset.zone);document.querySelectorAll('.zone-tab').forEach(x=>x.classList.toggle('active',x===b));rebuildZoneControls();});
+document.getElementById('zoneContent').onchange=e=>{state.zones[activeZone].content=Number(e.target.value);sync();};document.getElementById('finish').onchange=e=>{state.finish=Number(e.target.value);sync();};
+document.querySelectorAll('[data-toggle]').forEach(btn=>btn.onclick=()=>{const k=btn.dataset.toggle;const map={contours:'contourOn',projection:'projectionOn',orbit:'orbit',guides:'guides',brick:'brick'};state[map[k]]=!state[map[k]];btn.classList.toggle('on',state[map[k]]);sync();});
+
+const poses={front:[0,0,1900],left:[-930,180,1550],right:[930,140,1550],detail:[-360,180,980]};function moveCamera(name){const [x,y,z]=poses[name];const start=camera.position.clone(),end=new THREE.Vector3(x,y,z);const t0=performance.now();function step(now){const t=Math.min(1,(now-t0)/900),e=1-Math.pow(1-t,3);camera.position.lerpVectors(start,end,e);controls.target.lerp(new THREE.Vector3(0,0,55),.08);if(t<1)requestAnimationFrame(step);}requestAnimationFrame(step);}document.querySelectorAll('[data-cam]').forEach(b=>b.onclick=()=>moveCamera(b.dataset.cam));
+function toast(msg){const el=document.getElementById('toast');el.textContent=msg;el.classList.add('on');clearTimeout(toast.t);toast.t=setTimeout(()=>el.classList.remove('on'),2200);}
+document.getElementById('shot').onclick=()=>{composer.render();const a=document.createElement('a');a.download=`prismatica-surface-${state.seed}-${Date.now()}.png`;a.href=renderer.domElement.toDataURL('image/png');a.click();toast('4K-ready still saved');};
+document.getElementById('savePreset').onclick=()=>{const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const a=document.createElement('a');a.download=`surface-setup-${state.seed}.json`;a.href=URL.createObjectURL(blob);a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast('Surface setup saved');};
+
+let recorder,chunks=[],recordStart=0;const recBtn=document.getElementById('record');const overlay=document.getElementById('renderOverlay');
+async function exportVideo(){if(recorder?.state==='recording'){recorder.stop();return;}const stream=renderer.domElement.captureStream(30);const mime=['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'].find(MediaRecorder.isTypeSupported)||'';try{recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:24_000_000});}catch{toast('Video recording is not supported in this browser');return;}chunks=[];recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onstop=async()=>{recBtn.classList.remove('recording');recBtn.textContent='● Render MP4';document.getElementById('renderTitle').textContent='Encoding MP4';document.getElementById('renderStatus').textContent='Converting the captured movement to a universal video file.';const blob=new Blob(chunks,{type:mime||'video/webm'});try{const response=await fetch('/api/sculpture-render',{method:'POST',headers:{'Content-Type':'video/webm','X-Render-Seed':String(state.seed)},body:blob});if(!response.ok)throw new Error((await response.json().catch(()=>({}))).error||'conversion failed');const mp4=await response.blob();downloadBlob(mp4,`prismatica-surface-${state.seed}-${Date.now()}.mp4`);toast('MP4 render saved');}catch(err){downloadBlob(blob,`prismatica-surface-${state.seed}-${Date.now()}.webm`);toast('MP4 conversion unavailable, WebM saved instead');}overlay.classList.remove('on');};recorder.start(250);recordStart=performance.now();overlay.classList.add('on');recBtn.classList.add('recording');recBtn.textContent='■ Stop render';document.getElementById('renderTitle').textContent='Recording movement';document.getElementById('renderStatus').textContent='Capturing 8 seconds of the current camera and shader movement.';state.orbit=true;setTimeout(()=>{if(recorder?.state==='recording')recorder.stop()},8000);}
+function downloadBlob(blob,name){const a=document.createElement('a');const url=URL.createObjectURL(blob);a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);}recBtn.onclick=exportVideo;
+
+let orbitAngle=0,last=performance.now();function animate(now){requestAnimationFrame(animate);const dt=Math.min(.05,(now-last)/1000);last=now;uniforms.uTime.value=now/1000;if(state.orbit&&!controls._dragging){orbitAngle+=dt*state.orbitSpeed;const base=1700,arc=Math.sin(orbitAngle*Math.PI*2)*(state.orbitArc*Math.PI/180);camera.position.x=Math.sin(arc)*base;camera.position.z=Math.cos(arc)*base;camera.position.y=140+Math.sin(orbitAngle*Math.PI*4)*90;camera.lookAt(controls.target);}controls.update();composer.render();}
+renderer.domElement.addEventListener('pointerdown',()=>{controls._dragging=true});addEventListener('pointerup',()=>{controls._dragging=false});
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);composer.setSize(innerWidth,innerHeight);});
+sync();animate(performance.now());
+</script>
+</body>
+</html>

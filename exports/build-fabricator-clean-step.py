@@ -131,6 +131,7 @@ VERIFIED_EQUATION_LENSES = {
     "torus_field",
     "hex_cells",
     "organic_bulbs",
+    "compound_bulbs",
     "pyramid_grid",
     "dome",
     "morph_rings",
@@ -162,6 +163,10 @@ def next_export_version() -> int:
 
 def versioned_export_names(version: int) -> dict[str, str]:
     base = f"PV2-step-v{version:03d}"
+    return export_names(base)
+
+
+def export_names(base: str) -> dict[str, str]:
     return {
         "base": base,
         "step": f"{base}.step",
@@ -359,6 +364,18 @@ LENS_DEFAULT_PARAMS = {
         "min_h": 8.0,
         "max_h": 22.0,
         "ripple_curvature": 1.0,
+    },
+    "compound_bulbs": {
+        "feature_count": 13,
+        "seed": 41,
+        "min_radius": 55.0,
+        "max_radius": 125.0,
+        "relief": 32.0,
+        "anisotropy": 0.55,
+        "well_mix": 0.23,
+        "saddle_strength": 0.65,
+        "profile_power": 1.35,
+        "edge_taper_width": 55.0,
     },
     "pyramid_grid": {
         "cols": 8,
@@ -910,6 +927,61 @@ def organic_bulbs_height(x: float, y: float, state: dict) -> float:
     return z
 
 
+def compound_bulbs_height(x: float, y: float, state: dict) -> float:
+    """Irregular large-scale convex and concave field for varied pixel displacement."""
+
+    width = float(state.get("panelWidth", WIDTH_MM))
+    height = float(state.get("panelHeight", HEIGHT_MM))
+    params = params_for(state)
+    scale = float(state.get("shapeScale") or 1.0)
+    if state.get("mirrorLens"):
+        x, y = abs(x), abs(y)
+    x *= scale
+    y *= scale
+
+    count = max(3, int(params.get("feature_count", 13)))
+    rng = mulberry32(params.get("seed", 41))
+    min_radius = max(5.0, float(params.get("min_radius", 55.0)))
+    max_radius = max(min_radius, float(params.get("max_radius", 125.0)))
+    relief = max(0.1, float(params.get("relief", 32.0)))
+    anisotropy = max(0.0, min(0.9, float(params.get("anisotropy", 0.55))))
+    well_mix = max(0.0, min(0.49, float(params.get("well_mix", 0.23))))
+    saddle_strength = max(0.0, float(params.get("saddle_strength", 0.65)))
+    profile_power = max(0.2, float(params.get("profile_power", 1.35)))
+    edge_taper = max(1.0, float(params.get("edge_taper_width", 55.0)))
+    margin = min(max_radius * 0.55, min(width, height) * 0.22)
+    well_every = max(3, round(1.0 / well_mix)) if well_mix > 0.0 else None
+
+    field = 0.0
+    for i in range(count):
+        radius = max_radius if i == 0 else min_radius + rng() * (max_radius - min_radius)
+        minor_ratio = 1.0 - anisotropy * (0.35 + 0.65 * rng())
+        angle = rng() * math.pi * 2.0
+        cx = 0.0 if i == 0 else rng() * max(1.0, width - 2.0 * margin) - (width * 0.5 - margin)
+        cy = 0.0 if i == 0 else rng() * max(1.0, height - 2.0 * margin) - (height * 0.5 - margin)
+        is_well = i > 0 and well_every is not None and i % well_every == well_every - 1
+        strength = (
+            -relief * saddle_strength * (0.55 + 0.35 * rng())
+            if is_well
+            else relief * (0.65 + 0.35 * rng())
+        )
+        dx = x - cx
+        dy = y - cy
+        ca = math.cos(angle)
+        sa = math.sin(angle)
+        ex = (dx * ca + dy * sa) / radius
+        ey = (-dx * sa + dy * ca) / (radius * minor_ratio)
+        q = math.hypot(ex, ey)
+        if q < 1.0:
+            cap = 0.5 * (1.0 + math.cos(math.pi * q))
+            field += strength * math.pow(cap, profile_power)
+
+    shaped = max(0.0, math.tanh(field / (relief * 0.72)))
+    d_edge = min(width * 0.5 - abs(x), height * 0.5 - abs(y))
+    edge_env = 0.0 if d_edge <= 0.0 else smootherstep01(d_edge / edge_taper)
+    return relief * shaped * edge_env
+
+
 def pyramid_grid_height(x: float, y: float, state: dict) -> float:
     width = float(state.get("panelWidth", WIDTH_MM))
     height = float(state.get("panelHeight", HEIGHT_MM))
@@ -1077,6 +1149,7 @@ LENS_HEIGHT_FUNCTIONS = {
     "torus_field": torus_field_height,
     "hex_cells": hex_cells_height,
     "organic_bulbs": organic_bulbs_height,
+    "compound_bulbs": compound_bulbs_height,
     "pyramid_grid": pyramid_grid_height,
     "dome": dome_height,
     "morph_rings": morph_rings_height,
@@ -2105,9 +2178,24 @@ def write_validation_pdf(
 
 
 def main() -> int:
+    global OUT_DIR, VERSION_FILE
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-json", help="Path to exported Prismatica visualizer state JSON")
+    parser.add_argument(
+        "--output-dir",
+        help="Optional output directory. Defaults to the app's saved fabricator STEP folder.",
+    )
+    parser.add_argument(
+        "--export-basename",
+        help="Optional stable filename base instead of the next PV2-step-vNNN version.",
+    )
     args = parser.parse_args()
+
+    if args.output_dir:
+        OUT_DIR = Path(args.output_dir).expanduser().resolve()
+        VERSION_FILE = OUT_DIR / ".next_step_version"
+    if args.export_basename and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", args.export_basename):
+        parser.error("--export-basename may contain only letters, numbers, dots, underscores, and hyphens")
 
     state = load_state(args.state_json)
     require_verified_equation_lens(state)
@@ -2130,8 +2218,8 @@ def main() -> int:
         "volume_mm3": volume_mm3(solid),
     }
 
-    version = next_export_version()
-    names = versioned_export_names(version)
+    version = None if args.export_basename else next_export_version()
+    names = export_names(args.export_basename) if args.export_basename else versioned_export_names(version)
     step_name = names["step"]
     preview_name = names["preview"]
     readme_name = names["readme"]
@@ -2172,7 +2260,7 @@ def main() -> int:
         "File for CAM:\n"
         f"- {step_name}\n\n"
         "Fabricator QA gate:\n"
-        f"- Export version: v{version:03d}\n"
+        f"- Export version: {names['base'] if version is None else f'v{version:03d}'}\n"
         f"- Status: {qa['status']}\n"
         f"- Lens preset is equation-defined: {qa['equation_defined']}\n"
         f"- Topology check: {qa['checks']['topology']}\n"
