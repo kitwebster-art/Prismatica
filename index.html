@@ -6997,6 +6997,81 @@ function applyPortfolioPreset(name) {
   guiRefresh();
 }
 
+// Deterministic public entry look. Chrome may have user-saved defaults, but a
+// fresh Railway/browser profile has no local storage and should open on the
+// blue Ripple Field hero rather than falling through to an unrelated preset.
+const PUBLIC_HERO_PRESET = (() => {
+  const p = defaultStateSnapshot();
+  Object.assign(p, {
+    lensType: 'ripple_field',
+    panelWidth: 500,
+    panelHeight: 500,
+    resolution: 1,
+    smoothing: 1,
+    shapeScale: 1,
+    flatEdgeWidth: 0,
+    params: {
+      wavelength: 70,
+      amplitude: 50,
+      ripple_profile: 'current',
+      ripple_curvature: 1,
+      ripple_phase: 0,
+      ridge_width: 0.47,
+      ripple_contrast: 1,
+      valley_lift: 0,
+      ripple_stretch: 1,
+      ripple_angle: 0,
+      radial_falloff: 0,
+      center_bulge_height: 30.5,
+      center_bulge_radius: 126,
+      center_bulge_curve: 2.15,
+      center_bulge_shoulder: 0,
+      edge_taper_width: 83,
+    },
+    construction: 'solid_flat_back',
+    ior: 1.5,
+    dispersion: 0,
+    thickness: 10,
+    distortionBoost: 5,
+    roughness: 0.07,
+    panelMode: 4,
+    panelScale: 16,
+    panelSpeed: 0.6,
+    panelBrightness: 1.6,
+    panelContrast: 1,
+    panelHue: 0.66,
+    panelSat: 1,
+    panelDistance: 4,
+    pgLineWidth: 0.365,
+    pgFlow: -0.14,
+    patSharp: 1,
+    patScale: 3.56,
+    patDetail: 1,
+    patDistort: 0,
+    patSeed: 0,
+    patAxis: 2,
+    mirrorPanel: true,
+    mirrorLens: true,
+    panelSmooth: true,
+    bgColor: '#050505',
+    wallMaterial: 'polished',
+    wallBrightness: 1.43,
+    wallScale: 21.5,
+    envPreset: 'gallery',
+    envIntensity: 0.55,
+    lookSaturation: 1,
+    lookContrast: 1,
+    lookVignette: 0,
+    lookGrain: 0,
+    lookSharpen: 0,
+    lookLutMix: 1,
+    lookLutPreset: 'deep_cosmic',
+    bloomEnabled: false,
+    compare: false,
+  });
+  return p;
+})();
+
 // Startup: prefer user-saved defaults in the studio. The portfolio opens on a
 // curated optical scene so the embedded canvas never resembles a blank panel.
 (function autoLoadDefaults() {
@@ -7007,13 +7082,10 @@ function applyPortfolioPreset(name) {
       refreshPresetDropdown();
       setStatus('loaded saved defaults');
     } else {
-      const presets = loadPresets();
-      if (presets['4']) {
-        applyPreset(presets['4']);
-        state.currentPreset = '4';
-        refreshPresetDropdown();
-        setStatus('loaded preset "4"');
-      }
+      applyPreset(PUBLIC_HERO_PRESET);
+      state.currentPreset = '—';
+      refreshPresetDropdown();
+      setStatus('loaded public Ripple Field hero');
     }
   } else {
     applyPortfolioPreset('3');
