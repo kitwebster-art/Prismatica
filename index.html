@@ -105,16 +105,17 @@
      stays in the DOM so all the setStatus() calls scattered through the code
      don't need rewriting; it's just visually invisible. */
   #status { display: none; }
-  #constructionCompareLegend, #rearSurfaceCompareLegend {
+  #constructionCompareLegend, #rearSurfaceCompareLegend, #shapeCompareLegend {
     display: none; position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
     width: min(calc(100vw - 660px), 1120px); gap: 18px;
     color: rgba(255,255,255,0.82); font-size: 11px; letter-spacing: 0.12em;
     text-transform: uppercase; text-align: center; pointer-events: none; z-index: 5;
   }
   #constructionCompareLegend { grid-template-columns: repeat(3, 1fr); }
-  #rearSurfaceCompareLegend { grid-template-columns: repeat(2, 1fr); }
-  #constructionCompareLegend.active, #rearSurfaceCompareLegend.active { display: grid; }
-  #constructionCompareLegend span, #rearSurfaceCompareLegend span { padding: 7px 10px; background: rgba(5,5,5,0.58); border: 1px solid rgba(255,255,255,0.14); border-radius: 999px; backdrop-filter: blur(8px); }
+  #rearSurfaceCompareLegend, #shapeCompareLegend { grid-template-columns: repeat(2, 1fr); }
+  #shapeCompareLegend.top-bottom { grid-template-columns: 1fr; width: min(220px, calc(100vw - 40px)); }
+  #constructionCompareLegend.active, #rearSurfaceCompareLegend.active, #shapeCompareLegend.active { display: grid; }
+  #constructionCompareLegend span, #rearSurfaceCompareLegend span, #shapeCompareLegend span { padding: 7px 10px; background: rgba(5,5,5,0.58); border: 1px solid rgba(255,255,255,0.14); border-radius: 999px; backdrop-filter: blur(8px); }
   #stepExportToast {
     position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
     z-index: 60; display: none; min-width: 260px; max-width: min(520px, calc(100vw - 32px));
@@ -558,6 +559,7 @@ body.render-mode canvas { opacity: 0.01 !important; pointer-events: none !import
 <div id="status">loading…</div>
 <div id="constructionCompareLegend" aria-hidden="true"><span>Solid</span><span>Hollow shell</span><span>Lightweight sheet</span></div>
 <div id="rearSurfaceCompareLegend" aria-hidden="true"><span>Sine rear</span><span>Flat rear</span></div>
+<div id="shapeCompareLegend" aria-hidden="true"><span>Square</span><span>Round</span></div>
 <div id="stepExportToast" role="status" aria-live="polite"></div>
 
 <div id="renderOverlay">
@@ -1544,25 +1546,25 @@ ledCasingC.position.z = -30 - 15;
 ledCasingC.visible = false;
 scene.add(ledCasingC);
 
-function ledPanelDiameter() {
-  return Math.max(1, Math.min(Number(state.panelWidth) || 1, Number(state.panelHeight) || 1));
+function ledPanelDiameter(width = state.panelWidth, height = state.panelHeight) {
+  return Math.max(1, Math.min(Number(width) || 1, Number(height) || 1));
 }
 
-function makeLedPanelGeometry() {
-  if (state.panelShape === 'round') {
-    return new THREE.CircleGeometry(ledPanelDiameter() * 0.5, 128);
+function makeLedPanelGeometry(shape = state.panelShape, width = state.panelWidth, height = state.panelHeight) {
+  if (shape === 'round') {
+    return new THREE.CircleGeometry(ledPanelDiameter(width, height) * 0.5, 128);
   }
-  return new THREE.PlaneGeometry(state.panelWidth, state.panelHeight);
+  return new THREE.PlaneGeometry(width, height);
 }
 
-function makeLedCasingGeometry() {
-  if (state.panelShape === 'round') {
-    const radius = ledPanelDiameter() * 0.5;
+function makeLedCasingGeometry(shape = state.panelShape, width = state.panelWidth, height = state.panelHeight) {
+  if (shape === 'round') {
+    const radius = ledPanelDiameter(width, height) * 0.5;
     const geometry = new THREE.CylinderGeometry(radius, radius, 30, 128, 1, false);
     geometry.rotateX(Math.PI * 0.5);
     return geometry;
   }
-  return new THREE.BoxGeometry(state.panelWidth, state.panelHeight, 30);
+  return new THREE.BoxGeometry(width, height, 30);
 }
 
 function ledPanelSizeLabel() {
@@ -3485,6 +3487,8 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   rearMinimumThickness: 10,
   shellThickness: 3,               // wall or sheet thickness for lightweight construction modes
   constructionCompare: false,      // show solid, hollow, and sheet side by side
+  shapeCompare: false,             // show matched square and round assemblies together
+  shapeCompareLayout: 'side_by_side', // side_by_side | top_bottom
   distortionBoost: 0.0,
   roughness: 0.02,
   tint: '#ffffff',
@@ -3739,11 +3743,11 @@ function withCircularFlatEdge(fn, radius, flatWidth = 0) {
   };
 }
 
-function makeLensHeightFn(lensType, params, width, height) {
+function makeLensHeightFn(lensType, params, width, height, footprintOverride = null) {
   const type = LENS_TYPES[lensType];
   const base = type.fn(params, width, height);
   const shaped = withShapeScale(withMirror(base, state.mirrorLens), state.shapeScale);
-  const footprint = lensFootprintFor(lensType, params, width, height);
+  const footprint = footprintOverride || lensFootprintFor(lensType, params, width, height);
   return footprint.kind === 'circle'
     ? withCircularFlatEdge(shaped, footprint.radius, state.flatEdgeWidth)
     : withFlatEdge(shaped, width, height, state.flatEdgeWidth);
@@ -3964,19 +3968,25 @@ function rebuildLenses() {
   const typeA = LENS_TYPES[state.lensType];
   const rearSurfaceCompare = isRearSurfaceComparisonActive();
   updateStepPreviewInfo(state.panelWidth, state.panelHeight);
-  const hA = makeLensHeightFn(state.lensType, state.params, state.panelWidth, state.panelHeight);
+  const comparisonSize = Math.min(state.panelWidth, state.panelHeight);
+  const primaryWidth = state.shapeCompare ? comparisonSize : state.panelWidth;
+  const primaryHeight = state.shapeCompare ? comparisonSize : state.panelHeight;
+  const primaryFootprint = state.shapeCompare
+    ? { kind: 'rect' }
+    : lensFootprintFor(state.lensType, state.params, state.panelWidth, state.panelHeight);
+  const hA = makeLensHeightFn(state.lensType, state.params, primaryWidth, primaryHeight, primaryFootprint);
   const primaryConstruction = state.constructionCompare ? 'solid_flat_back' : state.construction;
   const rearA = primaryConstruction === 'solid_curved_back'
-    ? makeLensRearReliefFn(state.lensType, state.params, state.panelWidth, state.panelHeight)
+    ? makeLensRearReliefFn(state.lensType, state.params, primaryWidth, primaryHeight)
     : null;
   const geoA = makeLensGeometryForFootprint(
     hA,
-    state.panelWidth,
-    state.panelHeight,
+    primaryWidth,
+    primaryHeight,
     lensResolution,
     state.thickness,
     state.smoothing,
-    lensFootprintFor(state.lensType, state.params, state.panelWidth, state.panelHeight),
+    primaryFootprint,
     primaryConstruction,
     state.shellThickness,
     rearA,
@@ -4027,9 +4037,79 @@ function rebuildLenses() {
     });
     document.getElementById('constructionCompareLegend')?.classList.add('active');
     document.getElementById('rearSurfaceCompareLegend')?.classList.remove('active');
+    document.getElementById('shapeCompareLegend')?.classList.remove('active');
     const totalVerts = geoA.attributes.position.count + hollowGeo.attributes.position.count + sheetGeo.attributes.position.count;
     state.shapeViewInfo = state.shapeView ? `${lensResolution.toFixed(2)}mm · ${totalVerts.toLocaleString()} verts` : 'off';
     setStatus(`${typeA.label} · solid / hollow / lightweight · ${lensFootprintLabel()} · ${ledPanelSizeLabel()} each`);
+  } else if (state.shapeCompare) {
+    const gap = 80;
+    const offset = comparisonSize * 0.5 + gap * 0.5;
+    const horizontal = state.shapeCompareLayout !== 'top_bottom';
+    const squarePosition = horizontal ? new THREE.Vector2(-offset, 0) : new THREE.Vector2(0, offset);
+    const roundPosition = horizontal ? new THREE.Vector2(offset, 0) : new THREE.Vector2(0, -offset);
+    lensMesh.position.set(squarePosition.x, squarePosition.y, 0);
+
+    if (lensMeshB) { lensMeshB.geometry.dispose(); scene.remove(lensMeshB); }
+    const roundFootprint = { kind: 'circle', radius: comparisonSize * 0.5 };
+    const roundHeight = makeLensHeightFn(
+      state.lensType,
+      state.params,
+      comparisonSize,
+      comparisonSize,
+      roundFootprint
+    );
+    const roundRear = state.construction === 'solid_curved_back'
+      ? makeLensRearReliefFn(state.lensType, state.params, comparisonSize, comparisonSize)
+      : null;
+    const roundGeo = makeLensGeometryForFootprint(
+      roundHeight,
+      comparisonSize,
+      comparisonSize,
+      lensResolution,
+      state.thickness,
+      state.smoothing,
+      roundFootprint,
+      state.construction,
+      state.shellThickness,
+      roundRear,
+      state.rearMinimumThickness
+    );
+    lensMeshB = new THREE.Mesh(roundGeo, lensMaterialB);
+    lensMeshB.position.set(roundPosition.x, roundPosition.y, 0);
+    scene.add(lensMeshB);
+
+    const comparisonDepth = constructionAssemblyDepth();
+    const comparisonLedZ = -(comparisonDepth + state.panelDistance);
+    ledPanel.visible = true;
+    ledPanel.position.set(squarePosition.x, squarePosition.y, comparisonLedZ);
+    ledPanel.geometry.dispose();
+    ledPanel.geometry = makeLedPanelGeometry('rectangular', comparisonSize, comparisonSize);
+    ledCasing.visible = true;
+    ledCasing.position.set(squarePosition.x, squarePosition.y, comparisonLedZ - 15);
+    ledCasing.geometry.dispose();
+    ledCasing.geometry = makeLedCasingGeometry('rectangular', comparisonSize, comparisonSize);
+
+    ledPanelB.visible = true;
+    ledPanelB.position.set(roundPosition.x, roundPosition.y, comparisonLedZ);
+    ledPanelB.geometry.dispose();
+    ledPanelB.geometry = makeLedPanelGeometry('round', comparisonSize, comparisonSize);
+    ledCasingB.visible = true;
+    ledCasingB.position.set(roundPosition.x, roundPosition.y, comparisonLedZ - 15);
+    ledCasingB.geometry.dispose();
+    ledCasingB.geometry = makeLedCasingGeometry('round', comparisonSize, comparisonSize);
+    ledPanelC.visible = false;
+    ledCasingC.visible = false;
+
+    document.getElementById('constructionCompareLegend')?.classList.remove('active');
+    document.getElementById('rearSurfaceCompareLegend')?.classList.remove('active');
+    const shapeLegend = document.getElementById('shapeCompareLegend');
+    shapeLegend?.classList.add('active');
+    shapeLegend?.classList.toggle('top-bottom', !horizontal);
+    state.shapeViewInfo = state.shapeView
+      ? `${lensResolution.toFixed(2)}mm · ${(geoA.attributes.position.count + roundGeo.attributes.position.count).toLocaleString()} verts`
+      : 'off';
+    const layoutLabel = horizontal ? 'side by side' : 'top + bottom';
+    setStatus(`Square + round · ${layoutLabel} · matched Ø${comparisonSize} mm assemblies`);
   } else if (rearSurfaceCompare) {
     const offsetX = state.panelWidth / 2 + 40;
     lensMesh.position.set(-offsetX, 0, 0);
@@ -4075,6 +4155,7 @@ function rebuildLenses() {
     ledCasingC.visible = false;
     document.getElementById('constructionCompareLegend')?.classList.remove('active');
     document.getElementById('rearSurfaceCompareLegend')?.classList.add('active');
+    document.getElementById('shapeCompareLegend')?.classList.remove('active');
 
     const shapeNote = state.shapeView ? ` · ShapeView ${lensResolution.toFixed(2)}mm` : '';
     state.shapeViewInfo = state.shapeView
@@ -4119,6 +4200,7 @@ function rebuildLenses() {
     ledCasingC.visible = false;
     document.getElementById('constructionCompareLegend')?.classList.remove('active');
     document.getElementById('rearSurfaceCompareLegend')?.classList.remove('active');
+    document.getElementById('shapeCompareLegend')?.classList.remove('active');
 
     const shapeNote = state.shapeView ? ` · ShapeView ${lensResolution.toFixed(2)}mm` : '';
     state.shapeViewInfo = state.shapeView
@@ -4140,6 +4222,7 @@ function rebuildLenses() {
     ledCasingC.visible = false;
     document.getElementById('constructionCompareLegend')?.classList.remove('active');
     document.getElementById('rearSurfaceCompareLegend')?.classList.remove('active');
+    document.getElementById('shapeCompareLegend')?.classList.remove('active');
     const shapeNote = state.shapeView ? ` · ShapeView ${lensResolution.toFixed(2)}mm` : '';
     state.shapeViewInfo = state.shapeView
       ? `${lensResolution.toFixed(2)}mm · ${geoA.attributes.position.count.toLocaleString()} verts`
@@ -4598,7 +4681,7 @@ function presetSnapshot() {
   const s = {};
   for (const k of [
     'lensType','lensShape','panelWidth','panelHeight','panelShape','resolution','smoothing','shapeScale','flatEdgeWidth','stepExportQuality','stepSurfacePreview','opticalCleanSurface','shapeViewStyle','shapeViewResolution','params',
-    'ior','dispersion','thickness','construction','rearDepth','rearScale','rearOffsetX','rearOffsetY','rearMinimumThickness','shellThickness','constructionCompare','distortionBoost','roughness','tint',
+    'ior','dispersion','thickness','construction','rearDepth','rearScale','rearOffsetX','rearOffsetY','rearMinimumThickness','shellThickness','constructionCompare','shapeCompare','shapeCompareLayout','distortionBoost','roughness','tint',
     'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelSat','panelDistance','pgLineWidth','pgFlow',
     'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
     'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
@@ -4708,6 +4791,14 @@ function applyPreset(p) {
   if (!('shellThickness' in p)) state.shellThickness = 3;
   state.shellThickness = Math.max(0.25, Math.min(15, Number(state.shellThickness) || 3));
   if (!('constructionCompare' in p)) state.constructionCompare = false;
+  if (!('shapeCompare' in p)) state.shapeCompare = false;
+  if (!('shapeCompareLayout' in p)) state.shapeCompareLayout = 'side_by_side';
+  if (!['side_by_side', 'top_bottom'].includes(state.shapeCompareLayout)) state.shapeCompareLayout = 'side_by_side';
+  if (state.shapeCompare) {
+    state.compare = false;
+    state.constructionCompare = false;
+    if (state.params && 'rear_compare_enabled' in state.params) state.params.rear_compare_enabled = false;
+  }
   if (!('distortionBoostB' in p)) state.distortionBoostB = 0.0;
   if (!('mirrorLens' in p)) state.mirrorLens = true;
   if (!('mirrorPanel' in p)) state.mirrorPanel = true;
@@ -4748,6 +4839,7 @@ function applyPreset(p) {
   fillMissingParams(state.lensType, state.params);
   fillMissingParams(state.lensTypeB, state.paramsB);
   if (!isRearSurfaceComparisonActive()) restoreRearSurfaceCompareView();
+  if (!state.shapeCompare) restoreShapeCompareView();
   applyBuiltInLutPreset(state.lookLutPreset, { silent: true });
   syncMaterials();
   syncShader();
@@ -4764,6 +4856,7 @@ function applyPreset(p) {
   buildParamFolders();
   rebuildLenses();
   if (state.constructionCompare) fitConstructionCompareView();
+  if (state.shapeCompare) fitShapeCompareView();
   if (isRearSurfaceComparisonActive()) fitRearSurfaceCompareView();
   if (typeof window.__updatePanelDimensionControls === 'function') {
     window.__updatePanelDimensionControls();
@@ -5278,8 +5371,8 @@ function syncMaterials() {
   lensMaterialB.roughness = state.roughnessB;
   lensMaterialB.color.set(state.tintB);
   lensMaterialB.attenuationColor.set(state.tintB);
-  if (state.constructionCompare || isRearSurfaceComparisonActive()) {
-    const comparisonThickness = isRearSurfaceComparisonActive()
+  if (state.constructionCompare || state.shapeCompare || isRearSurfaceComparisonActive()) {
+    const comparisonThickness = (state.shapeCompare || isRearSurfaceComparisonActive())
       ? state.thickness
       : state.shellThickness;
     lensMaterialB.ior = state.ior;
@@ -5313,6 +5406,56 @@ function fitConstructionCompareView() {
   controls.target.set(0, 0, 0);
   camera.position.set(0, Math.min(state.panelHeight * 0.18, 120), z);
   controls.update();
+}
+
+let shapeCompareCameraSnapshot = null;
+function fitShapeCompareView() {
+  const size = Math.min(state.panelWidth, state.panelHeight);
+  const gap = 80;
+  const horizontal = state.shapeCompareLayout !== 'top_bottom';
+  const totalWidth = horizontal ? size * 2 + gap : size;
+  const totalHeight = horizontal ? size : size * 2 + gap;
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
+  const usableWidth = Math.max(360, window.innerWidth - 620);
+  const usableAspect = usableWidth / Math.max(360, window.innerHeight);
+  const distanceForHeight = totalHeight / (2 * Math.tan(vfov / 2));
+  const distanceForWidth = totalWidth / (2 * Math.tan(vfov / 2) * Math.max(0.4, usableAspect));
+  const z = Math.max(distanceForHeight, distanceForWidth) * 1.16;
+  controls.target.set(0, 0, 0);
+  camera.position.set(0, 0, z);
+  camera.lookAt(controls.target);
+  controls.update();
+}
+
+function restoreShapeCompareView() {
+  if (!shapeCompareCameraSnapshot) return;
+  camera.position.copy(shapeCompareCameraSnapshot.position);
+  controls.target.copy(shapeCompareCameraSnapshot.target);
+  camera.lookAt(controls.target);
+  controls.update();
+  shapeCompareCameraSnapshot = null;
+}
+
+function setShapeComparison(enabled) {
+  const next = !!enabled;
+  if (next && !shapeCompareCameraSnapshot) {
+    shapeCompareCameraSnapshot = {
+      position: camera.position.clone(),
+      target: controls.target.clone(),
+    };
+  }
+  state.shapeCompare = next;
+  if (next) {
+    state.compare = false;
+    state.constructionCompare = false;
+    if (state.params && 'rear_compare_enabled' in state.params) state.params.rear_compare_enabled = false;
+    restoreRearSurfaceCompareView();
+  }
+  syncMaterials();
+  rebuildLenses();
+  if (next) fitShapeCompareView();
+  else restoreShapeCompareView();
+  guiRefresh();
 }
 
 let rearSurfaceCompareCameraSnapshot = null;
@@ -5352,6 +5495,8 @@ function setRearSurfaceComparison(enabled) {
     state.params.rear_sine_enabled = true;
     state.compare = false;
     state.constructionCompare = false;
+    state.shapeCompare = false;
+    restoreShapeCompareView();
   }
   syncMaterials();
   rebuildLenses();
@@ -5395,10 +5540,11 @@ function syncShader() {
     m.uniforms.uSqGradFlow.value  = state.sqGradFlow;
     m.uniforms.uPanelSmooth.value = state.panelSmooth ? 1 : 0;
   }
+  const comparisonDepthB = state.shapeCompare ? constructionAssemblyDepth() : state.thicknessB;
   ledPanel.position.z  = -(constructionAssemblyDepth() + state.panelDistance);
-  ledPanelB.position.z = -(state.thicknessB + state.panelDistance);
+  ledPanelB.position.z = -(comparisonDepthB + state.panelDistance);
   ledCasing.position.z  = -(constructionAssemblyDepth() + state.panelDistance) - 15;
-  ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15;
+  ledCasingB.position.z = -(comparisonDepthB + state.panelDistance) - 15;
   syncBackdropZ();
 }
 function syncScene() {
@@ -6619,6 +6765,15 @@ normalizeState();
     guiRefresh();
     setStatus(`${lensFootprintLabel()} selected`);
   });
+  fA.add(state, 'shapeCompare').name('compare square + round').onChange(setShapeComparison);
+  fA.add(state, 'shapeCompareLayout', {
+    'side by side': 'side_by_side',
+    'top + bottom': 'top_bottom',
+  }).name('comparison layout').onChange(() => {
+    if (!state.shapeCompare) return;
+    rebuildLenses();
+    fitShapeCompareView();
+  });
   // Create the shape sub-folder up front so it sits directly under the type dropdown.
   paramFolderA = fA.addFolder('shape');
   const ctlPanelWidth = fA.add(state, 'panelWidth', 100, 2000, 10).name('panel W (mm)').onFinishChange(() => {
@@ -6626,6 +6781,7 @@ normalizeState();
     syncPanelDimensionControls();
     syncShader();
     rebuildLenses();
+    if (state.shapeCompare) fitShapeCompareView();
     guiRefresh();
   });
   const ctlPanelHeight = fA.add(state, 'panelHeight', 100, 2000, 10).name('panel H (mm)').onFinishChange(() => {
@@ -6633,6 +6789,7 @@ normalizeState();
     syncPanelDimensionControls();
     syncShader();
     rebuildLenses();
+    if (state.shapeCompare) fitShapeCompareView();
     guiRefresh();
   });
   fA.add(state, 'resolution', 0.5, 8.0, 0.5).name('mesh res (mm)').onFinishChange(rebuildLenses);
@@ -6678,9 +6835,16 @@ normalizeState();
   });
   f1.add(state, 'constructionCompare').name('compare all 3').onChange((on) => {
     state.compare = false;
+    if (on) {
+      state.shapeCompare = false;
+      restoreShapeCompareView();
+      if (state.params && 'rear_compare_enabled' in state.params) state.params.rear_compare_enabled = false;
+      restoreRearSurfaceCompareView();
+    }
     syncMaterials();
     rebuildLenses();
     if (on) fitConstructionCompareView();
+    guiRefresh();
   });
   f1.add(state, 'shellThickness', 0.5, 15, 0.25).name('shell / sheet (mm)').onChange(syncMaterials).onFinishChange(rebuildLenses);
   f1.add(state, 'ior', 1.0, 2.0, 0.01).onChange(syncMaterials);
@@ -6767,7 +6931,7 @@ normalizeState();
   const ctlPgLineWidth = f2.add(state, 'pgLineWidth', 0.0, 0.4, 0.005).name('grid line thickness').onChange(v => { ledMat.uniforms.uPgLineWidth.value = v; ledMatB.uniforms.uPgLineWidth.value = v; });
   const ctlPgFlow      = f2.add(state, 'pgFlow', -5.0, 5.0, 0.01).name('grid drift speed').onChange(v => { ledMat.uniforms.uPgFlow.value = v; ledMatB.uniforms.uPgFlow.value = v; });
   const ctlMirrorPanel = f2.add(state, 'mirrorPanel').name('mirror H + V (symmetric)').onChange(v => { ledMat.uniforms.uPanelMirror.value = v ? 1 : 0; ledMatB.uniforms.uPanelMirror.value = v ? 1 : 0; });
-  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { const depthA = constructionAssemblyDepth(); ledPanel.position.z = -(depthA + state.panelDistance); ledPanelB.position.z = -(state.thicknessB + state.panelDistance); ledCasing.position.z = -(depthA + state.panelDistance) - 15; ledCasingB.position.z = -(state.thicknessB + state.panelDistance) - 15; syncBackdropZ(); });
+  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { const depthA = constructionAssemblyDepth(); const depthB = state.shapeCompare ? depthA : state.thicknessB; ledPanel.position.z = -(depthA + state.panelDistance); ledPanelB.position.z = -(depthB + state.panelDistance); ledCasing.position.z = -(depthA + state.panelDistance) - 15; ledCasingB.position.z = -(depthB + state.panelDistance) - 15; syncBackdropZ(); });
   const ctlPanelSmooth = f2.add(state, 'panelSmooth').name('smooth panel (anti-alias)').onChange(v => { ledMat.uniforms.uPanelSmooth.value = v ? 1 : 0; ledMatB.uniforms.uPanelSmooth.value = v ? 1 : 0; });
   const ctlLoadImage   = f2.add(state, 'loadImage').name('load image…');
   const ctlLoadVideo   = f2.add(state, 'loadVideo').name('load video…');
@@ -7333,6 +7497,7 @@ window.addEventListener('resize', () => {
   bloomPass.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
+  if (state.shapeCompare) fitShapeCompareView();
   updateSectionProfileOverlay();
   syncLookResolution(window.innerWidth, window.innerHeight);
   updateAspectOverlay();
@@ -7912,9 +8077,9 @@ function applyShapeView(on, options = {}) {
   if (lensMeshB) lensMeshB.material = next ? shapeViewMaterial : lensMaterialB;
   if (lensMeshC) lensMeshC.material = next ? shapeViewMaterial : lensMaterialC;
   if (ledPanel)  ledPanel.visible   = !next && state.lensType !== 'logo';
-  if (ledPanelB) ledPanelB.visible  = !next && (state.compare || isRearSurfaceComparisonActive());
+  if (ledPanelB) ledPanelB.visible  = !next && (state.compare || state.shapeCompare || isRearSurfaceComparisonActive());
   if (ledCasing)  ledCasing.visible  = !next && state.lensType !== 'logo';
-  if (ledCasingB) ledCasingB.visible = !next && (state.compare || isRearSurfaceComparisonActive());
+  if (ledCasingB) ledCasingB.visible = !next && (state.compare || state.shapeCompare || isRearSurfaceComparisonActive());
   // Lift the flat background in shape view, then restore the real wall material
   // on exit. Textured wall presets need applyWallMaterial(); simply setting the
   // material colour would leave the gallery wall flattened for live/export.
