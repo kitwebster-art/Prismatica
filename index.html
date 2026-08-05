@@ -1584,6 +1584,126 @@ const backdrop = new THREE.Mesh(
 backdrop.position.z = -77;
 scene.add(backdrop);
 
+// ── Human scale figure -----------------------------------------------------
+// A deliberately neutral, low-poly gallery visitor at 1:1 millimetre scale.
+// The figure is procedural so it stays lightweight and remains available in
+// local, Railway, GitHub Pages, portfolio, still, and video-render contexts.
+const scaleFigureMaterial = new THREE.MeshStandardMaterial({
+  color: 0x34373b,
+  roughness: 0.92,
+  metalness: 0.0,
+  flatShading: true,
+});
+
+function makeScaleFigureLimb(start, end, startRadius, endRadius, material = scaleFigureMaterial) {
+  const direction = end.clone().sub(start);
+  const length = Math.max(1, direction.length());
+  const geometry = new THREE.CylinderGeometry(endRadius, startRadius, length, 6, 1, false);
+  const limb = new THREE.Mesh(geometry, material);
+  limb.position.copy(start).add(end).multiplyScalar(0.5);
+  limb.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+  return limb;
+}
+
+function createHumanScaleFigure() {
+  const figure = new THREE.Group();
+  figure.name = 'human-scale-figure';
+
+  const pelvis = new THREE.Mesh(new THREE.CylinderGeometry(145, 175, 210, 7), scaleFigureMaterial);
+  pelvis.position.y = 900;
+  figure.add(pelvis);
+
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(165, 205, 550, 7), scaleFigureMaterial);
+  torso.position.y = 1240;
+  torso.rotation.z = -0.025;
+  figure.add(torso);
+
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(58, 66, 95, 6), scaleFigureMaterial);
+  neck.position.set(10, 1552, -4);
+  neck.rotation.z = -0.08;
+  figure.add(neck);
+
+  const headPivot = new THREE.Group();
+  headPivot.position.set(18, 1660, -8);
+  headPivot.rotation.set(0.04, -0.22, -0.17);
+  const head = new THREE.Mesh(new THREE.IcosahedronGeometry(112, 1), scaleFigureMaterial);
+  head.scale.set(0.88, 1.08, 0.94);
+  headPivot.add(head);
+  figure.add(headPivot);
+
+  // Legs, with a slight asymmetry so the pose feels observed rather than posed.
+  const leftHip = new THREE.Vector3(-86, 870, 0);
+  const leftKnee = new THREE.Vector3(-108, 500, 12);
+  const leftAnkle = new THREE.Vector3(-102, 130, 22);
+  const rightHip = new THREE.Vector3(86, 870, 0);
+  const rightKnee = new THREE.Vector3(118, 510, -4);
+  const rightAnkle = new THREE.Vector3(142, 130, -10);
+  figure.add(
+    makeScaleFigureLimb(leftHip, leftKnee, 88, 72),
+    makeScaleFigureLimb(leftKnee, leftAnkle, 70, 48),
+    makeScaleFigureLimb(rightHip, rightKnee, 88, 72),
+    makeScaleFigureLimb(rightKnee, rightAnkle, 70, 48),
+  );
+
+  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(115, 70, 245, 1, 1, 1), scaleFigureMaterial);
+  leftShoe.position.set(-102, 55, -38);
+  leftShoe.rotation.y = -0.07;
+  figure.add(leftShoe);
+  const rightShoe = leftShoe.clone();
+  rightShoe.position.set(142, 55, -54);
+  rightShoe.rotation.y = 0.09;
+  figure.add(rightShoe);
+
+  // Relaxed left arm.
+  const leftShoulder = new THREE.Vector3(-170, 1430, -2);
+  const leftElbow = new THREE.Vector3(-212, 1130, 22);
+  const leftHandPos = new THREE.Vector3(-192, 870, 18);
+  figure.add(
+    makeScaleFigureLimb(leftShoulder, leftElbow, 72, 58),
+    makeScaleFigureLimb(leftElbow, leftHandPos, 58, 40),
+  );
+  const leftHand = new THREE.Mesh(new THREE.IcosahedronGeometry(48, 0), scaleFigureMaterial);
+  leftHand.position.copy(leftHandPos);
+  leftHand.scale.set(0.78, 1.15, 0.72);
+  figure.add(leftHand);
+
+  // Bent right arm, with the hand resting at the chin.
+  const rightShoulder = new THREE.Vector3(168, 1430, 0);
+  const rightElbow = new THREE.Vector3(250, 1110, 82);
+  const chinHandPos = new THREE.Vector3(105, 1562, 32);
+  figure.add(
+    makeScaleFigureLimb(rightShoulder, rightElbow, 72, 58),
+    makeScaleFigureLimb(rightElbow, chinHandPos, 58, 42),
+  );
+  const chinHand = new THREE.Mesh(new THREE.IcosahedronGeometry(50, 0), scaleFigureMaterial);
+  chinHand.position.copy(chinHandPos);
+  chinHand.scale.set(0.8, 1.1, 0.72);
+  chinHand.rotation.z = -0.35;
+  figure.add(chinHand);
+
+  // A subtle contact shadow grounds the figure without introducing a full
+  // gallery floor that would compete with the existing wall-material studies.
+  const shadowMaterial = new THREE.MeshBasicMaterial({
+    color: 0x050505,
+    transparent: true,
+    opacity: 0.32,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const shadow = new THREE.Mesh(new THREE.CircleGeometry(250, 20), shadowMaterial);
+  shadow.rotation.x = -Math.PI * 0.5;
+  shadow.scale.y = 0.46;
+  shadow.position.set(18, 3, -18);
+  figure.add(shadow);
+
+  figure.rotation.y = -0.12;
+  return figure;
+}
+
+const humanScaleFigure = createHumanScaleFigure();
+humanScaleFigure.visible = false;
+scene.add(humanScaleFigure);
+
 // ── Wall material — procedural gallery surface textures ───────────────────
 // All presets are achromatic grays; the variation is entirely in surface
 // roughness and micro-texture so the gallery lights reveal wall character
@@ -1709,6 +1829,68 @@ function syncBackdropZ() {
   if (!backdrop) return;
   const deepest = Math.max(constructionAssemblyDepth(), state.thicknessB || state.thickness || 15);
   backdrop.position.z = -(deepest + (state.panelDistance || 30) + 30) - 2;
+}
+
+function artworkSceneBounds() {
+  const width = Math.max(1, Number(state.panelWidth) || 500);
+  const height = Math.max(1, Number(state.panelHeight) || 500);
+  let halfWidth = width * 0.5;
+  let halfHeight = height * 0.5;
+
+  if (state.constructionCompare) {
+    halfWidth = width * 1.5 + 30;
+  } else if (state.shapeCompare) {
+    const size = Math.min(width, height);
+    if (state.shapeCompareLayout === 'top_bottom') {
+      halfWidth = size * 0.5;
+      halfHeight = size + 40;
+    } else {
+      halfWidth = size + 40;
+      halfHeight = size * 0.5;
+    }
+  } else if (state.compare || isRearSurfaceComparisonActive()) {
+    halfWidth = width + 40;
+  }
+
+  return { minX: -halfWidth, maxX: halfWidth, minY: -halfHeight, maxY: halfHeight };
+}
+
+function syncHumanScaleFigure() {
+  if (!humanScaleFigure) return;
+  humanScaleFigure.visible = !!state.humanScaleFigure;
+  if (!humanScaleFigure.visible) return;
+  const artwork = artworkSceneBounds();
+  const floorY = -1450;
+  humanScaleFigure.position.set(artwork.minX - 360, floorY, 380);
+}
+
+function fitHumanScaleView() {
+  if (!state.humanScaleFigure) return;
+  syncHumanScaleFigure();
+  const artwork = artworkSceneBounds();
+  const figureMinX = humanScaleFigure.position.x - 250;
+  const figureMaxX = humanScaleFigure.position.x + 250;
+  const minX = Math.min(artwork.minX, figureMinX);
+  const maxX = Math.max(artwork.maxX, figureMaxX);
+  const minY = Math.min(artwork.minY, humanScaleFigure.position.y);
+  const maxY = Math.max(artwork.maxY, humanScaleFigure.position.y + 1780);
+  const width = maxX - minX;
+  const height = maxY - minY;
+  const centreX = (minX + maxX) * 0.5;
+  const centreY = (minY + maxY) * 0.5;
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
+  const usableWidth = isPortfolioEmbed
+    ? Math.max(360, window.innerWidth)
+    : Math.max(360, window.innerWidth - 620);
+  const usableAspect = usableWidth / Math.max(360, window.innerHeight);
+  const distanceForHeight = height / (2 * Math.tan(vfov * 0.5));
+  const distanceForWidth = width / (2 * Math.tan(vfov * 0.5) * Math.max(0.4, usableAspect));
+  const distance = Math.max(distanceForHeight, distanceForWidth) * 1.1;
+  controls.target.set(centreX, centreY, 0);
+  camera.position.set(centreX + 90, centreY + 70, distance + 420);
+  camera.lookAt(controls.target);
+  controls.update();
+  liveSettleFrames = Math.max(liveSettleFrames, 2);
 }
 
 // -------------------------------------------------------------------------
@@ -3553,6 +3735,7 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   wallMaterial:   'none',  // none | concrete | plaster | polished | cement | limewash
   wallBrightness:  1.0,   // 0 = black → 2 = overexposed; multiplies texture colour
   wallScale:       8,     // texture repeat — lower = larger grain, higher = finer grain
+  humanScaleFigure: true, // 1.75 m low-poly gallery visitor for installation scale
   envPreset:    'spots',   // studio | gallery | spots | product
   envIntensity:  1.0,      // scene.environmentIntensity (0–4)
   bloomEnabled: false,
@@ -4237,6 +4420,7 @@ function rebuildLenses() {
     setStatus(`${typeA.label}  ·  ${buildLabel}  ·  ${lensFootprintLabel()}  ·  ${ledPanelSizeLabel()}  ·  ${(geoA.attributes.position.count).toLocaleString()} verts${shapeNote}`);
   }
   syncBackdropZ();
+  syncHumanScaleFigure();
   updateDimensionOverlay();
   updateSectionProfileOverlay();
   // Re-apply shape view if it was active — the rebuild just gave us a fresh
@@ -4686,7 +4870,7 @@ function presetSnapshot() {
     'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
     'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
     'sqGradient','sqGradA','sqGradB','sqGradC','sqGradAxis','sqGradScale','sqGradFlow',
-    'bgColor','wallMaterial','wallBrightness','wallScale','envPreset','envIntensity',
+    'bgColor','wallMaterial','wallBrightness','wallScale','humanScaleFigure','envPreset','envIntensity',
     'bloomEnabled','bloomStrength','bloomRadius','bloomThreshold','lensSpin',
     'lookSaturation','lookContrast','lookVignette','lookGrain','lookSharpen','lookLutMix','lookLutPreset',
     'compare','lensTypeB','paramsB','iorB','dispersionB','thicknessB','distortionBoostB','roughnessB','tintB',
@@ -4739,6 +4923,7 @@ function applyPreset(p) {
   if (!('panelShape' in p)) state.panelShape = 'rectangular';
   if (!['rectangular', 'round'].includes(state.panelShape)) state.panelShape = 'rectangular';
   if (state.panelShape === 'round') state.panelHeight = state.panelWidth;
+  if (!('humanScaleFigure' in p)) state.humanScaleFigure = true;
   if (isPortfolioEmbed) {
     state.resolution = Math.max(portfolioMeshResolution, Number(state.resolution) || portfolioMeshResolution);
     state.smoothing = Math.min(
@@ -4844,6 +5029,7 @@ function applyPreset(p) {
   syncMaterials();
   syncShader();
   syncScene();
+  syncHumanScaleFigure();
   // Dedicated/background renders restore the current app state by calling
   // applyPreset() inside a fresh hidden Chrome tab. Wall material and gallery
   // lighting are scene resources rather than shader uniforms, so they must be
@@ -5396,6 +5582,10 @@ function syncMaterials() {
 }
 
 function fitConstructionCompareView() {
+  if (state.humanScaleFigure) {
+    fitHumanScaleView();
+    return;
+  }
   const totalWidth = state.panelWidth * 3 + 120;
   const vfov = THREE.MathUtils.degToRad(camera.fov);
   const usableWidth = Math.max(360, window.innerWidth - 620);
@@ -5410,6 +5600,10 @@ function fitConstructionCompareView() {
 
 let shapeCompareCameraSnapshot = null;
 function fitShapeCompareView() {
+  if (state.humanScaleFigure) {
+    fitHumanScaleView();
+    return;
+  }
   const size = Math.min(state.panelWidth, state.panelHeight);
   const gap = 80;
   const horizontal = state.shapeCompareLayout !== 'top_bottom';
@@ -5460,6 +5654,10 @@ function setShapeComparison(enabled) {
 
 let rearSurfaceCompareCameraSnapshot = null;
 function fitRearSurfaceCompareView() {
+  if (state.humanScaleFigure) {
+    fitHumanScaleView();
+    return;
+  }
   const totalWidth = state.panelWidth * 2 + 80;
   const vfov = THREE.MathUtils.degToRad(camera.fov);
   const usableWidth = Math.max(360, window.innerWidth - 620);
@@ -6781,7 +6979,8 @@ normalizeState();
     syncPanelDimensionControls();
     syncShader();
     rebuildLenses();
-    if (state.shapeCompare) fitShapeCompareView();
+    if (state.humanScaleFigure) fitHumanScaleView();
+    else if (state.shapeCompare) fitShapeCompareView();
     guiRefresh();
   });
   const ctlPanelHeight = fA.add(state, 'panelHeight', 100, 2000, 10).name('panel H (mm)').onFinishChange(() => {
@@ -6789,7 +6988,8 @@ normalizeState();
     syncPanelDimensionControls();
     syncShader();
     rebuildLenses();
-    if (state.shapeCompare) fitShapeCompareView();
+    if (state.humanScaleFigure) fitHumanScaleView();
+    else if (state.shapeCompare) fitShapeCompareView();
     guiRefresh();
   });
   fA.add(state, 'resolution', 0.5, 8.0, 0.5).name('mesh res (mm)').onFinishChange(rebuildLenses);
@@ -6870,6 +7070,7 @@ normalizeState();
     syncPanelDimensionControls();
     syncShader();
     rebuildLenses();
+    if (state.humanScaleFigure) fitHumanScaleView();
     guiRefresh();
     setStatus(`${ledPanelSizeLabel()} selected`);
   });
@@ -7017,6 +7218,10 @@ normalizeState();
   }).name('wall material').onChange(v => { state.wallMaterial = v; applyWallMaterial(v); });
   fScene.add(state, 'wallBrightness', 0.0, 2.0, 0.01).name('wall brightness').onChange(applyWallAdjust);
   fScene.add(state, 'wallScale', 2, 24, 0.5).name('texture scale (grain)').onChange(applyWallAdjust);
+  fScene.add(state, 'humanScaleFigure').name('human scale figure').onChange((visible) => {
+    syncHumanScaleFigure();
+    if (visible) fitHumanScaleView();
+  });
   const fEnv = fScene.addFolder('Environment').close();
   fEnv.add(state, 'envPreset', ['studio', 'gallery', 'spots', 'product']).name('preset').onChange(buildEnv);
   fEnv.add(state, 'envIntensity', 0.0, 4.0, 0.05).name('intensity').onChange(v => {
@@ -7199,6 +7404,10 @@ const PORTFOLIO_STUDY_LABELS = {
 let portfolioInteractive = !isPortfolioEmbed;
 
 function resetPortfolioCamera() {
+  if (state.humanScaleFigure) {
+    fitHumanScaleView();
+    return;
+  }
   // Product-first framing, informed by the approved technical overview render:
   // the object fills the stage and the three-quarter angle reveals both the
   // acrylic relief and the dark enclosure behind it.
@@ -7425,6 +7634,7 @@ const PUBLIC_HERO_PRESET = (() => {
   rebuildLenses();
   buildEnv();
   applyWallMaterial(state.wallMaterial || 'none');
+  if (state.humanScaleFigure) fitHumanScaleView();
   guiRefresh();
   // Refresh the per-mode panel slider visibility after a preset loads its
   // panelMode. Without this, sliders that don't apply to the loaded mode (eg.
@@ -7497,7 +7707,8 @@ window.addEventListener('resize', () => {
   bloomPass.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  if (state.shapeCompare) fitShapeCompareView();
+  if (state.humanScaleFigure) fitHumanScaleView();
+  else if (state.shapeCompare) fitShapeCompareView();
   updateSectionProfileOverlay();
   syncLookResolution(window.innerWidth, window.innerHeight);
   updateAspectOverlay();
