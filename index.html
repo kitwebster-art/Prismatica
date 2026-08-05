@@ -2834,7 +2834,16 @@ function makeLensGeometry(heightFn, width, height, resolution, thickness, smooth
 
 function makeLensGeometryForFootprint(heightFn, width, height, resolution, thickness, smoothing = 0, footprint = { kind: 'rect' }, construction = 'solid_flat_back', shellThickness = 3, rearReliefFn = null, minimumThickness = thickness) {
   if (footprint && footprint.kind === 'circle') {
-    return makeCircularLensGeometry(heightFn, footprint.radius, resolution, thickness);
+    return makeCircularLensGeometry(
+      heightFn,
+      footprint.radius,
+      resolution,
+      thickness,
+      construction,
+      shellThickness,
+      rearReliefFn,
+      minimumThickness
+    );
   }
   const { grid, nx, ny } = buildLensHeightGrid(heightFn, width, height, resolution, smoothing);
   const curvedRear = construction === 'solid_curved_back' && typeof rearReliefFn === 'function';
@@ -2921,7 +2930,7 @@ function makeLensGeometryForFootprint(heightFn, width, height, resolution, thick
   return geo;
 }
 
-function makeCircularLensGeometry(heightFn, radius, resolution, thickness) {
+function makeCircularLensGeometry(heightFn, radius, resolution, thickness, construction = 'solid_flat_back', shellThickness = 3, rearReliefFn = null, minimumThickness = thickness) {
   const rMax = Math.max(1, Number(radius) || 1);
   const radialStep = Math.max(1.0, Number(resolution) || 1.0);
   const rings = Math.max(8, Math.min(420, Math.ceil(rMax / radialStep)));
@@ -2931,8 +2940,16 @@ function makeCircularLensGeometry(heightFn, radius, resolution, thickness) {
   const indices = [];
   const vert = (x, y, z) => { const id = verts.length / 3; verts.push(x, y, z); return id; };
 
-  const topCenter = vert(0, 0, heightFn(0, 0));
-  const botCenter = vert(0, 0, -thickness);
+  const rearZAt = (x, y, topZ) => construction === 'hollow_shell'
+    ? topZ - Math.max(0.25, shellThickness)
+    : construction === 'lightweight_sheet'
+      ? -Math.max(0.25, shellThickness)
+      : construction === 'solid_curved_back' && typeof rearReliefFn === 'function'
+        ? curvedRearZ(topZ, rearReliefFn(x, y), thickness, minimumThickness)
+        : -thickness;
+  const centerTopZ = heightFn(0, 0);
+  const topCenter = vert(0, 0, centerTopZ);
+  const botCenter = vert(0, 0, rearZAt(0, 0, centerTopZ));
   const topRings = [];
   const botRings = [];
   for (let ri = 1; ri <= rings; ri++) {
@@ -2943,8 +2960,9 @@ function makeCircularLensGeometry(heightFn, radius, resolution, thickness) {
       const a = Math.PI * 2 * si / segments;
       const x = Math.cos(a) * rr;
       const y = Math.sin(a) * rr;
-      rowT.push(vert(x, y, heightFn(x, y)));
-      rowB.push(vert(x, y, -thickness));
+      const topZ = heightFn(x, y);
+      rowT.push(vert(x, y, topZ));
+      rowB.push(vert(x, y, rearZAt(x, y, topZ)));
     }
     topRings.push(rowT);
     botRings.push(rowB);
@@ -2985,12 +3003,30 @@ function makeCircularLensGeometry(heightFn, radius, resolution, thickness) {
 
 function lensFootprintFor(lensType, params, width, height) {
   const type = LENS_TYPES[lensType];
-  if (type && type.footprint === 'circle') {
+  if (state.lensShape === 'round' || (type && type.footprint === 'circle')) {
     const rawDiameter = Number(params && params.diameter);
-    const diameter = Math.max(1, Math.min(Number.isFinite(rawDiameter) ? rawDiameter : Math.min(width, height), Math.min(width, height)));
+    const useTypeDiameter = type && type.footprint === 'circle' && Number.isFinite(rawDiameter);
+    const diameter = Math.max(1, Math.min(useTypeDiameter ? rawDiameter : Math.min(width, height), Math.min(width, height)));
     return { kind: 'circle', radius: diameter * 0.5 };
   }
   return { kind: 'rect' };
+}
+
+function lensFootprintLabel(lensType = state.lensType, params = state.params, width = state.panelWidth, height = state.panelHeight) {
+  const footprint = lensFootprintFor(lensType, params, width, height);
+  return footprint.kind === 'circle'
+    ? `round Ø${Math.round(footprint.radius * 2)} mm lens`
+    : `${width}×${height} mm lens`;
+}
+
+function lensFootprintArea(footprint, width, height) {
+  return footprint.kind === 'circle'
+    ? Math.PI * footprint.radius * footprint.radius
+    : width * height;
+}
+
+function pointInsideLensFootprint(x, y, footprint) {
+  return footprint.kind !== 'circle' || Math.hypot(x, y) <= footprint.radius;
 }
 
 function applyBoxBlurGrid(grid, nx, ny, radius) {
@@ -3424,6 +3460,7 @@ function syncShapeViewMaterial() {
 // -------------------------------------------------------------------------
 const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   lensType: 'ripple_field',
+  lensShape: 'standard', // standard follows the selected lens type; round overrides any type
   panelWidth: 600,
   panelHeight: 600,
   panelShape: 'rectangular', // rectangular | round; round uses panelWidth as diameter
@@ -3691,11 +3728,25 @@ function withFlatEdge(fn, width, height, flatWidth = 0) {
   };
 }
 
+function withCircularFlatEdge(fn, radius, flatWidth = 0) {
+  const flat = Math.max(0, Number(flatWidth) || 0);
+  if (flat <= 0) return fn;
+  const blend = Math.min(6, Math.max(2, flat * 0.5));
+  return (x, y) => {
+    const d = radius - Math.hypot(x, y);
+    if (d <= flat) return 0;
+    return fn(x, y) * smootherStep01((d - flat) / blend);
+  };
+}
+
 function makeLensHeightFn(lensType, params, width, height) {
   const type = LENS_TYPES[lensType];
   const base = type.fn(params, width, height);
   const shaped = withShapeScale(withMirror(base, state.mirrorLens), state.shapeScale);
-  return withFlatEdge(shaped, width, height, state.flatEdgeWidth);
+  const footprint = lensFootprintFor(lensType, params, width, height);
+  return footprint.kind === 'circle'
+    ? withCircularFlatEdge(shaped, footprint.radius, state.flatEdgeWidth)
+    : withFlatEdge(shaped, width, height, state.flatEdgeWidth);
 }
 
 // Recompute the dimension overlay panel from the current state. Walks the
@@ -3709,6 +3760,7 @@ function updateDimensionOverlay() {
   if (!state.showDimensions) return;
   try {
     const W = state.panelWidth, H = state.panelHeight;
+    const footprint = lensFootprintFor(state.lensType, state.params, W, H);
     const heightFn = makeLensHeightFn(state.lensType, state.params, W, H);
     const curvedRear = state.construction === 'solid_curved_back';
     const rearFn = curvedRear ? makeLensRearReliefFn(state.lensType, state.params, W, H) : null;
@@ -3717,6 +3769,7 @@ function updateDimensionOverlay() {
     const cell = step * step;
     for (let y = -H/2; y <= H/2; y += step) {
       for (let x = -W/2; x <= W/2; x += step) {
+        if (!pointInsideLensFootprint(x, y, footprint)) continue;
         const z = heightFn(x, y);
         if (z > maxZ) maxZ = z;
         if (z > 0) volR += z * cell;
@@ -3735,7 +3788,7 @@ function updateDimensionOverlay() {
     const solidConstruction = state.construction === 'solid_flat_back' || curvedRear;
     const baseT = solidConstruction ? state.thickness : state.shellThickness;
     const totalH = baseT + maxZ;
-    const volBase = W * H * baseT;
+    const volBase = lensFootprintArea(footprint, W, H) * baseT;
     // Volume is mm^3. Divide by 1000 to get cm^3, multiply by PMMA density
     // (1.18 g/cm^3), then divide by 1000 to get kg: equivalent to /1e6 * 1.18.
     const volume = state.construction === 'hollow_shell'
@@ -3743,7 +3796,7 @@ function updateDimensionOverlay() {
       : volBase + volR - volRearRemoved;
     const massKg = (volume / 1e6) * 1.18;
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    set('dimFoot',   `${W} × ${H} mm`);
+    set('dimFoot',   lensFootprintLabel(state.lensType, state.params, W, H));
     set('dimBase',   solidConstruction ? `${baseT.toFixed(0)} mm${curvedRear ? ' edge' : ''}` : `${baseT.toFixed(1)} mm ${state.construction === 'hollow_shell' ? 'shell' : 'sheet'}`);
     set('dimPeak',   `${maxZ.toFixed(1)} mm`);
     set('dimTotal',  `${totalH.toFixed(1)} mm`);
@@ -3976,7 +4029,7 @@ function rebuildLenses() {
     document.getElementById('rearSurfaceCompareLegend')?.classList.remove('active');
     const totalVerts = geoA.attributes.position.count + hollowGeo.attributes.position.count + sheetGeo.attributes.position.count;
     state.shapeViewInfo = state.shapeView ? `${lensResolution.toFixed(2)}mm · ${totalVerts.toLocaleString()} verts` : 'off';
-    setStatus(`${typeA.label} · solid / hollow / lightweight · ${ledPanelSizeLabel()} each`);
+    setStatus(`${typeA.label} · solid / hollow / lightweight · ${lensFootprintLabel()} · ${ledPanelSizeLabel()} each`);
   } else if (rearSurfaceCompare) {
     const offsetX = state.panelWidth / 2 + 40;
     lensMesh.position.set(-offsetX, 0, 0);
@@ -4027,7 +4080,7 @@ function rebuildLenses() {
     state.shapeViewInfo = state.shapeView
       ? `${lensResolution.toFixed(2)}mm · ${(geoA.attributes.position.count + flatRearGeo.attributes.position.count).toLocaleString()} verts`
       : 'off';
-    setStatus(`Sine rear  ·  Flat rear  ·  identical ${ledPanelSizeLabel()} fronts${shapeNote}`);
+    setStatus(`Sine rear  ·  Flat rear  ·  identical ${lensFootprintLabel()} fronts · ${ledPanelSizeLabel()}${shapeNote}`);
   } else if (state.compare) {
     const offsetX = state.panelWidth / 2 + 40;
     lensMesh.position.set(-offsetX, 0, 0);
@@ -4071,7 +4124,7 @@ function rebuildLenses() {
     state.shapeViewInfo = state.shapeView
       ? `${lensResolution.toFixed(2)}mm · ${(geoA.attributes.position.count + geoB.attributes.position.count).toLocaleString()} verts`
       : 'off';
-    setStatus(`A: ${typeA.label}  ·  B: ${typeB.label}  ·  ${ledPanelSizeLabel()} each${shapeNote}`);
+    setStatus(`A: ${typeA.label}  ·  B: ${typeB.label}  ·  ${lensFootprintLabel()} · ${ledPanelSizeLabel()} each${shapeNote}`);
   } else {
     lensMesh.position.set(0, 0, 0);
     ledPanel.position.set(0, 0, ledZA);
@@ -4098,7 +4151,7 @@ function rebuildLenses() {
         : state.construction === 'solid_curved_back'
           ? `double freeform · ${state.thickness}mm edge · ${state.rearDepth}mm rear depth`
         : `solid ${state.thickness}mm base`;
-    setStatus(`${typeA.label}  ·  ${buildLabel}  ·  ${ledPanelSizeLabel()}  ·  ${(geoA.attributes.position.count).toLocaleString()} verts${shapeNote}`);
+    setStatus(`${typeA.label}  ·  ${buildLabel}  ·  ${lensFootprintLabel()}  ·  ${ledPanelSizeLabel()}  ·  ${(geoA.attributes.position.count).toLocaleString()} verts${shapeNote}`);
   }
   syncBackdropZ();
   updateDimensionOverlay();
@@ -4544,7 +4597,7 @@ function savePresets(obj) { localStorage.setItem(PRESET_KEY, JSON.stringify(obj)
 function presetSnapshot() {
   const s = {};
   for (const k of [
-    'lensType','panelWidth','panelHeight','panelShape','resolution','smoothing','shapeScale','flatEdgeWidth','stepExportQuality','stepSurfacePreview','opticalCleanSurface','shapeViewStyle','shapeViewResolution','params',
+    'lensType','lensShape','panelWidth','panelHeight','panelShape','resolution','smoothing','shapeScale','flatEdgeWidth','stepExportQuality','stepSurfacePreview','opticalCleanSurface','shapeViewStyle','shapeViewResolution','params',
     'ior','dispersion','thickness','construction','rearDepth','rearScale','rearOffsetX','rearOffsetY','rearMinimumThickness','shellThickness','constructionCompare','distortionBoost','roughness','tint',
     'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelSat','panelDistance','pgLineWidth','pgFlow',
     'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
@@ -4598,6 +4651,8 @@ function applyPreset(p) {
   // Migrate older presets that predate these fields to the current defaults.
   if (!('smoothing' in p)) state.smoothing = 1;
   if (!('resolution' in p) || state.resolution > 2.5) state.resolution = 1.0;
+  if (!('lensShape' in p)) state.lensShape = 'standard';
+  if (!['standard', 'round'].includes(state.lensShape)) state.lensShape = 'standard';
   if (!('panelShape' in p)) state.panelShape = 'rectangular';
   if (!['rectangular', 'round'].includes(state.panelShape)) state.panelShape = 'rectangular';
   if (state.panelShape === 'round') state.panelHeight = state.panelWidth;
@@ -5503,12 +5558,11 @@ function resetAll() {
 function buildSolidForExport(isB, resolutionOverride = null) {
   const W = state.panelWidth, H = state.panelHeight;
   const res = resolutionOverride != null ? resolutionOverride : Math.min(state.resolution, 2.0);
-  const nx = Math.max(4, Math.floor(W / res) + 1);
-  const ny = Math.max(4, Math.floor(H / res) + 1);
-  const type = LENS_TYPES[isB ? state.lensTypeB : state.lensType];
+  const lensType = isB ? state.lensTypeB : state.lensType;
+  const params = isB ? state.paramsB : state.params;
   const heightFn = makeLensHeightFn(
-    isB ? state.lensTypeB : state.lensType,
-    isB ? state.paramsB : state.params,
+    lensType,
+    params,
     W,
     H
   );
@@ -5518,57 +5572,19 @@ function buildSolidForExport(isB, resolutionOverride = null) {
   const rearFn = !isB && construction === 'solid_curved_back'
     ? makeLensRearReliefFn(state.lensType, state.params, W, H)
     : null;
-
-  const verts = [];
-  const vert = (x, y, z) => { const id = verts.length / 3; verts.push(x, y, z); return id; };
-  const topIds = [], botIds = [];
-  for (let i = 0; i < ny; i++) {
-    const y = -H/2 + (i / (ny - 1)) * H;
-    const rowT = [], rowB = [];
-    for (let j = 0; j < nx; j++) {
-      const x = -W/2 + (j / (nx - 1)) * W;
-      rowT.push(vert(x, y, heightFn(x, y)));
-    }
-    for (let j = 0; j < nx; j++) {
-      const x = -W/2 + (j / (nx - 1)) * W;
-      const topZ = heightFn(x, y);
-      const rearZ = construction === 'hollow_shell'
-        ? topZ - shellThickness
-        : construction === 'lightweight_sheet'
-          ? -shellThickness
-          : construction === 'solid_curved_back' && rearFn
-            ? curvedRearZ(topZ, rearFn(x, y), thickness, state.rearMinimumThickness)
-          : -thickness;
-      rowB.push(vert(x, y, rearZ));
-    }
-    topIds.push(rowT); botIds.push(rowB);
-  }
-  const triangles = [];
-  for (let i = 0; i < ny - 1; i++) for (let j = 0; j < nx - 1; j++) {
-    const a = topIds[i][j], b = topIds[i][j+1], c = topIds[i+1][j+1], d = topIds[i+1][j];
-    triangles.push(a, b, c, a, c, d);
-  }
-  for (let i = 0; i < ny - 1; i++) for (let j = 0; j < nx - 1; j++) {
-    const a = botIds[i][j], b = botIds[i][j+1], c = botIds[i+1][j+1], d = botIds[i+1][j];
-    triangles.push(a, c, b, a, d, c);
-  }
-  for (let j = 0; j < nx - 1; j++) {
-    const t1 = topIds[0][j], t2 = topIds[0][j+1], b1 = botIds[0][j], b2 = botIds[0][j+1];
-    triangles.push(t1, b1, b2, t1, b2, t2);
-    const ut1 = topIds[ny-1][j], ut2 = topIds[ny-1][j+1], ub1 = botIds[ny-1][j], ub2 = botIds[ny-1][j+1];
-    triangles.push(ut1, ub2, ub1, ut1, ut2, ub2);
-  }
-  for (let i = 0; i < ny - 1; i++) {
-    const t1 = topIds[i][0], t2 = topIds[i+1][0], b1 = botIds[i][0], b2 = botIds[i+1][0];
-    triangles.push(t1, b2, b1, t1, t2, b2);
-    const rt1 = topIds[i][nx-1], rt2 = topIds[i+1][nx-1], rb1 = botIds[i][nx-1], rb2 = botIds[i+1][nx-1];
-    triangles.push(rt1, rb1, rb2, rt1, rb2, rt2);
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-  geo.setIndex(triangles);
-  geo.computeVertexNormals();
-  geo.setAttribute('physicalNormal', geo.getAttribute('normal').clone());
+  const geo = makeLensGeometryForFootprint(
+    heightFn,
+    W,
+    H,
+    res,
+    thickness,
+    0,
+    lensFootprintFor(lensType, params, W, H),
+    construction,
+    shellThickness,
+    rearFn,
+    state.rearMinimumThickness
+  );
   return new THREE.Mesh(geo, lensMaterial);
 }
 function doExportSTL(isB) {
@@ -5765,6 +5781,11 @@ async function doExportFabricatorCleanSTEP() {
     setStatus('verified STEP currently supports solid flat-backed lenses only · use STL for shell/sheet studies');
     return;
   }
+  if (state.lensShape === 'round' && LENS_TYPES[state.lensType]?.footprint !== 'circle') {
+    showStepExportToast('Use STL or the faceted STEP export for this round lens footprint. Verified smooth STEP currently supports the dedicated Round Sine Lens only.');
+    setStatus('generic round footprint · use STL or faceted STEP export');
+    return;
+  }
   try {
     if (location.protocol !== 'http:' && location.protocol !== 'https:') {
       showStepExportToast('Open the Railway app to use clean STEP export.');
@@ -5781,6 +5802,7 @@ async function doExportFabricatorCleanSTEP() {
     setStatus('building verified machinable STEP solid…');
     const cadState = {
       lensType: state.lensType,
+      lensShape: state.lensShape,
       panelWidth: state.panelWidth,
       panelHeight: state.panelHeight,
       resolution: state.resolution,
@@ -5822,6 +5844,7 @@ async function doExportFabricatorCleanSTEP() {
 function doExportSpec() {
   try {
     const W = state.panelWidth, H = state.panelHeight;
+    const footprint = lensFootprintFor(state.lensType, state.params, W, H);
     const wrapped = makeLensHeightFn(state.lensType, state.params, W, H);
     const curvedRear = state.construction === 'solid_curved_back';
     const rearFn = curvedRear ? makeLensRearReliefFn(state.lensType, state.params, W, H) : null;
@@ -5835,6 +5858,7 @@ function doExportSpec() {
     const cellArea = step * step;
     for (let y = -H/2; y <= H/2; y += step) {
       for (let x = -W/2; x <= W/2; x += step) {
+        if (!pointInsideLensFootprint(x, y, footprint)) continue;
         const z = wrapped(x, y);
         if (z > maxZ) maxZ = z;
         if (z > 0) volRipple += z * cellArea;
@@ -5853,7 +5877,7 @@ function doExportSpec() {
     const solidConstruction = state.construction === 'solid_flat_back' || curvedRear;
     const baseT = solidConstruction ? state.thickness : state.shellThickness;
     const totalH = baseT + maxZ;
-    const volBase = W * H * baseT;       // mm³
+    const volBase = lensFootprintArea(footprint, W, H) * baseT; // mm³
     const volTotal = state.construction === 'hollow_shell'
       ? surfaceArea * Math.max(0.25, state.shellThickness)
       : volBase + volRipple - volRearRemoved; // mm³
@@ -5867,7 +5891,7 @@ function doExportSpec() {
       ``,
       `## Part`,
       `- **Material**: Cast PMMA (acrylic), clear, optical grade preferred`,
-      `- **Footprint**: ${W} × ${H} mm`,
+      `- **Footprint**: ${lensFootprintLabel(state.lensType, state.params, W, H)}`,
       `- **Construction**: ${state.construction.replace(/_/g, ' ')}`,
       `- **${curvedRear ? 'Edge thickness' : state.construction === 'solid_flat_back' ? 'Base thickness (flat back)' : 'Shell / sheet thickness'}**: ${baseT} mm`,
       ...(curvedRear ? [
@@ -6587,6 +6611,14 @@ normalizeState();
       rebuildLenses();
       guiRefresh();
     });
+  fA.add(state, 'lensShape', {
+    'standard (lens type)': 'standard',
+    round: 'round',
+  }).name('footprint').onChange(() => {
+    rebuildLenses();
+    guiRefresh();
+    setStatus(`${lensFootprintLabel()} selected`);
+  });
   // Create the shape sub-folder up front so it sits directly under the type dropdown.
   paramFolderA = fA.addFolder('shape');
   const ctlPanelWidth = fA.add(state, 'panelWidth', 100, 2000, 10).name('panel W (mm)').onFinishChange(() => {
