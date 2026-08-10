@@ -6131,11 +6131,9 @@ async function doExportFabricatorCleanSTEP() {
       setStatus('clean STEP export needs the Railway/local server');
       return;
     }
-    if (location.hostname.includes('github.io')) {
-      showStepExportToast('This static GitHub version cannot build STEP files. Use the Railway app.');
-      setStatus('clean STEP export needs the Railway app');
-      return;
-    }
+    const remoteCleanStepHost = location.hostname.includes('github.io') || location.hostname.endsWith('.chatgpt.site')
+      ? 'https://prismatica-production.up.railway.app'
+      : '';
     showStepExportToast('Building verified STEP for fabricator… this can take 2-4 minutes.', null, { progress: 4, label: 'Preparing CAD' });
     startStepExportProgress();
     setStatus('building verified machinable STEP solid…');
@@ -6154,7 +6152,7 @@ async function doExportFabricatorCleanSTEP() {
       thickness: state.thickness,
       params: { ...state.params },
     };
-    const resp = await fetch('/api/build-clean-step', {
+    const resp = await fetch(`${remoteCleanStepHost}/api/build-clean-step`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ state: cadState }),
@@ -6162,10 +6160,11 @@ async function doExportFabricatorCleanSTEP() {
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || 'clean STEP build failed');
 
-    const downloadUrl = new URL(data.zipUrl || data.stepUrl, location.href).href;
+    const downloadBase = remoteCleanStepHost ? `${remoteCleanStepHost}/` : location.href;
+    const downloadUrl = new URL(data.zipUrl || data.stepUrl, downloadBase).href;
     finishStepExportProgress(true);
     showStepExportToast('Verified STEP ready.', downloadUrl, { progress: 100, label: 'Ready', filename: data.filename || '' });
-    setStatus(`verified STEP ready · QA package saved to ${data.path}`);
+    setStatus(`verified STEP ready · ${data.filename || 'QA package generated'}`);
     // Navigating to the generated ZIP is more reliable than an async synthetic
     // click; Chrome treats it as a normal file download instead of a popup.
     setTimeout(() => { window.location.href = downloadUrl; }, 150);

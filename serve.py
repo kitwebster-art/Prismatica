@@ -329,6 +329,13 @@ class ReusableTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    STEP_EXPORT_ALLOWED_ORIGINS = {
+        "https://prismatica-production.up.railway.app",
+        "https://kitwebster-art.github.io",
+        "https://kitwebster-independent.kit-webster.chatgpt.site",
+        "https://kit-webster-clean-v2.kit-webster.chatgpt.site",
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
 
@@ -339,7 +346,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
+        origin = self.headers.get("Origin")
+        if self.path == "/api/build-clean-step" and origin in self.STEP_EXPORT_ALLOWED_ORIGINS:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Vary", "Origin")
         super().end_headers()
+
+    def do_OPTIONS(self):
+        origin = self.headers.get("Origin")
+        if self.path == "/api/build-clean-step" and origin in self.STEP_EXPORT_ALLOWED_ORIGINS:
+            self.send_response(204)
+            self.end_headers()
+            return
+        self.send_error(403, "Origin not allowed")
 
     def build_clean_step(self, state_payload=None):
         try:
