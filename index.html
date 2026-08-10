@@ -6125,11 +6125,6 @@ async function doExportFabricatorCleanSTEP() {
     setStatus('verified STEP currently supports solid flat-backed lenses only · use STL for shell/sheet studies');
     return;
   }
-  if (state.lensShape === 'round' && LENS_TYPES[state.lensType]?.footprint !== 'circle') {
-    showStepExportToast('Use STL or the faceted STEP export for this round lens footprint. Verified smooth STEP currently supports the dedicated Round Sine Lens only.');
-    setStatus('generic round footprint · use STL or faceted STEP export');
-    return;
-  }
   try {
     if (location.protocol !== 'http:' && location.protocol !== 'https:') {
       showStepExportToast('Open the Railway app to use clean STEP export.');
