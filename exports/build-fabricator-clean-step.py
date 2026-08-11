@@ -48,10 +48,10 @@ try:
         BRepBuilderAPI_MakeWire,
     )
     from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Common, BRepAlgoAPI_Cut
     from OCP.BRepCheck import BRepCheck_Analyzer
     from OCP.BRepGProp import BRepGProp
-    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeRevol
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeRevol
     from OCP.Geom import Geom_BSplineCurve, Geom_BSplineSurface
     from OCP.GeomAPI import GeomAPI_PointsToBSpline, GeomAPI_PointsToBSplineSurface
     from OCP.GProp import GProp_GProps
@@ -1878,6 +1878,118 @@ def export_step(shape, path: Path) -> None:
         raise RuntimeError(f"STEP export failed: {path}")
 
 
+def export_step_parts(shapes: list, path: Path) -> None:
+    """Write several independent solids as a single STEP assembly document."""
+    writer = STEPControl_Writer()
+    for shape in shapes:
+        writer.Transfer(shape, STEPControl_AsIs)
+    if writer.Write(str(path)) != IFSelect_RetDone:
+        raise RuntimeError(f"STEP assembly export failed: {path}")
+
+
+def selected_export_parts(state: dict) -> dict[str, bool]:
+    requested = state.get("exportParts")
+    if not isinstance(requested, dict):
+        return {
+            "lens": True,
+            "reflectiveEdge": False,
+            "casing": False,
+            "ledPanel": False,
+            "wallMount": False,
+        }
+    return {
+        "lens": bool(requested.get("lens")),
+        "reflectiveEdge": bool(requested.get("reflectiveEdge")),
+        "casing": bool(requested.get("casing")),
+        "ledPanel": bool(requested.get("ledPanel")),
+        "wallMount": bool(requested.get("wallMount")),
+    }
+
+
+def _round_panel(state: dict) -> bool:
+    return state.get("panelShape") == "round"
+
+
+def _box(width: float, height: float, depth: float, z_back: float):
+    return BRepPrimAPI_MakeBox(
+        gp_Pnt(-width * 0.5, -height * 0.5, z_back), width, height, depth
+    ).Shape()
+
+
+def _cylinder(radius: float, depth: float, z_back: float):
+    return BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(0, 0, z_back), gp_Dir(0, 0, 1)), radius, depth
+    ).Shape()
+
+
+def _cut(outer, inner, label: str):
+    operation = BRepAlgoAPI_Cut(outer, inner)
+    operation.Build()
+    if not operation.IsDone():
+        raise RuntimeError(f"Could not build {label}")
+    shape = operation.Shape()
+    if not BRepCheck_Analyzer(shape).IsValid():
+        raise RuntimeError(f"Generated {label} is invalid")
+    return shape
+
+
+def build_enclosure_parts(state: dict) -> dict[str, object]:
+    """Build dimensionally coherent enclosure concept solids around the verified lens."""
+    width = max(1.0, float(state.get("panelWidth", WIDTH_MM)))
+    height = max(1.0, float(state.get("panelHeight", HEIGHT_MM)))
+    if _round_panel(state):
+        width = height = min(width, height)
+    reveal = max(2.0, float(state.get("reflectiveEdgeReveal", 10.0)))
+    gap = max(0.5, float(state.get("panelDistance", 30.0)))
+    led_depth = max(1.0, float(state.get("ledPanelDepth", 6.0)))
+    casing_depth = max(4.0, float(state.get("casingDepth", 30.0)))
+    mount_depth = max(1.0, float(state.get("wallMountDepth", 6.0)))
+    frame_width = max(3.0, min(18.0, reveal + 4.0))
+
+    lens_rear_z = -BASE_THICKNESS_MM
+    led_front_z = lens_rear_z - gap
+    led_back_z = led_front_z - led_depth
+    casing_back_z = led_front_z - casing_depth
+    mount_back_z = casing_back_z - mount_depth
+
+    if _round_panel(state):
+        panel_radius = width * 0.5
+        outer_radius = panel_radius + reveal
+        reflective_edge = _cut(
+            _cylinder(outer_radius, gap, led_front_z),
+            _cylinder(max(1.0, panel_radius - frame_width), gap + 2.0, led_front_z - 1.0),
+            "reflective edge",
+        )
+        led_panel = _cylinder(panel_radius, led_depth, led_back_z)
+        casing = _cut(
+            _cylinder(outer_radius, casing_depth, casing_back_z),
+            _cylinder(max(1.0, outer_radius - 3.0), casing_depth, casing_back_z + 4.0),
+            "outer casing",
+        )
+        wall_mount = _cylinder(max(30.0, panel_radius * 0.55), mount_depth, mount_back_z)
+    else:
+        outer_w, outer_h = width + reveal * 2.0, height + reveal * 2.0
+        reflective_edge = _cut(
+            _box(outer_w, outer_h, gap, led_front_z),
+            _box(max(1.0, width - frame_width * 2.0), max(1.0, height - frame_width * 2.0), gap + 2.0, led_front_z - 1.0),
+            "reflective edge",
+        )
+        led_panel = _box(width, height, led_depth, led_back_z)
+        casing = _cut(
+            _box(outer_w, outer_h, casing_depth, casing_back_z),
+            _box(max(1.0, outer_w - 6.0), max(1.0, outer_h - 6.0), casing_depth, casing_back_z + 4.0),
+            "outer casing",
+        )
+        wall_mount = _box(max(60.0, width * 0.55), max(60.0, height * 0.55), mount_depth, mount_back_z)
+
+    return {
+        "reflectiveEdge": reflective_edge,
+        "casing": casing,
+        "ledPanel": led_panel,
+        "wallMount": wall_mount,
+    }
+
+
 def readback_validate(path: Path):
     shape = readback_shape(path)
     return topology_report(shape)
@@ -2376,16 +2488,93 @@ def main() -> int:
     readme_name = names["readme"]
     qa_name = names["qa"]
     pdf_name = names["pdf"]
+    assembly_name = f"{names['base']}-assembly.step"
+    manifest_name = f"{names['base']}-assembly-manifest.json"
     step_path = OUT_DIR / step_name
     preview_path = OUT_DIR / preview_name
     readme_path = OUT_DIR / readme_name
     qa_path = OUT_DIR / qa_name
     pdf_path = OUT_DIR / pdf_name
+    assembly_path = OUT_DIR / assembly_name
+    manifest_path = OUT_DIR / manifest_name
     export_step(solid, step_path)
     readback_shape_obj = readback_shape(step_path)
     readback = topology_report(readback_shape_obj)
     imported_surface = imported_front_surface_report(readback_shape_obj, LAST_REFERENCE_GRID or grid, state)
     qa = fabrication_qa_report(state, grid, fidelity, local, readback, imported_surface)
+    selection = selected_export_parts(state)
+    assembly_requested = isinstance(state.get("exportParts"), dict)
+    selected_files: list[str] = []
+    assembly_report = None
+    component_reports: dict[str, dict] = {
+        "lens": {**local, "status": "verified manufacturing geometry", "file": step_name}
+    }
+    if assembly_requested:
+        enclosure_parts = build_enclosure_parts(state)
+        component_shapes = {"lens": solid, **enclosure_parts}
+        component_file_names = {
+            "lens": step_name,
+            "reflectiveEdge": f"{names['base']}-reflective-edge.step",
+            "casing": f"{names['base']}-outer-casing.step",
+            "ledPanel": f"{names['base']}-led-panel.step",
+            "wallMount": f"{names['base']}-wall-mount.step",
+        }
+        selected_shapes = []
+        for part_key, enabled in selection.items():
+            if not enabled:
+                continue
+            part_shape = component_shapes[part_key]
+            report = topology_report(part_shape)
+            report["status"] = "verified manufacturing geometry" if part_key == "lens" else "concept CAD geometry"
+            report["file"] = component_file_names[part_key]
+            component_reports[part_key] = report
+            if not report["valid"] or report["solids"] < 1:
+                raise RuntimeError(f"Selected assembly part {part_key} failed topology validation")
+            if part_key != "lens":
+                export_step(part_shape, OUT_DIR / component_file_names[part_key])
+            selected_files.append(component_file_names[part_key])
+            selected_shapes.append(part_shape)
+        if not selected_shapes:
+            raise RuntimeError("No fabrication model parts were selected")
+        export_step_parts(selected_shapes, assembly_path)
+        assembly_report = topology_report(readback_shape(assembly_path))
+        if not assembly_report["valid"] or assembly_report["solids"] < len(selected_shapes):
+            raise RuntimeError("Combined assembly STEP failed re-import validation")
+        selected_files.append(assembly_name)
+        manifest = {
+            "schema": "prismatica.fabrication-assembly.v1",
+            "generated": datetime.now().isoformat(timespec="seconds"),
+            "units": "mm",
+            "selection": selection,
+            "files": selected_files,
+            "components": component_reports,
+            "assembly": assembly_report,
+            "dimensions": {
+                "panelWidth": float(state.get("panelWidth", WIDTH_MM)),
+                "panelHeight": float(state.get("panelHeight", HEIGHT_MM)),
+                "panelShape": state.get("panelShape", "rectangular"),
+                "opticalGap": float(state.get("panelDistance", 30.0)),
+                "reflectiveEdgeReveal": float(state.get("reflectiveEdgeReveal", 10.0)),
+                "ledPanelDepth": float(state.get("ledPanelDepth", 6.0)),
+                "casingDepth": float(state.get("casingDepth", 30.0)),
+                "wallMountDepth": float(state.get("wallMountDepth", 6.0)),
+            },
+            "readiness": {
+                "lens": "verified manufacturing geometry",
+                "reflectiveEdge": "concept CAD, confirm gauge, folds, joins and attachment",
+                "casing": "concept CAD, confirm electronics, ventilation, cable exits and fasteners",
+                "ledPanel": "space-claim model, replace with supplier module CAD when selected",
+                "wallMount": "concept CAD, engineer for wall type, total mass and local loads",
+            },
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        selected_files.append(manifest_name)
+        qa["assembly"] = {
+            "status": "PASS",
+            "selection": selection,
+            "components": component_reports,
+            "combined_step": assembly_report,
+        }
     qa_path.write_text(json.dumps(qa, indent=2, sort_keys=True), encoding="utf-8")
     write_preview_obj(preview_path, grid, state)
     write_validation_pdf(
@@ -2401,6 +2590,18 @@ def main() -> int:
         corner_cleanup,
     )
 
+    assembly_readme_text = ""
+    if assembly_requested:
+        assembly_readme_text = (
+            "Selected fabrication model:\n"
+            f"- Combined assembly: {assembly_name}\n"
+            f"- Selection manifest: {manifest_name}\n"
+            f"- Included files: {', '.join(selected_files)}\n"
+            "- Lens: verified equation-derived manufacturing geometry.\n"
+            "- Reflective edge, casing and wall mount: concept CAD requiring DFM and engineering review.\n"
+            "- LED panel: a space-claim solid, replace with the chosen supplier module CAD before production.\n\n"
+        )
+
     readme_path.write_text(
         "Prismatica V2 acrylic lens - verified STEP export\n"
         "=================================================\n\n"
@@ -2410,6 +2611,7 @@ def main() -> int:
         f"{cad_construction_description(state)}\n\n"
         "File for CAM:\n"
         f"- {step_name}\n\n"
+        f"{assembly_readme_text}"
         "Fabricator QA gate:\n"
         f"- Export version: {names['base'] if version is None else f'v{version:03d}'}\n"
         f"- Status: {qa['status']}\n"
@@ -2487,6 +2689,9 @@ def main() -> int:
     print(qa_path)
     print(pdf_path)
     print(preview_path)
+    if assembly_requested:
+        print(assembly_path)
+        print(manifest_path)
     print(f"samples={samples}, spacing={sample_spacing:.3f}mm")
     print(f"fabricator_qa={qa}")
     print(f"optical_cleanup={optical_cleanup}")

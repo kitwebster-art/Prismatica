@@ -1546,6 +1546,64 @@ ledCasingC.position.z = -30 - 15;
 ledCasingC.visible = false;
 scene.add(ledCasingC);
 
+// Mirror-polished inner spacer. This is a distinct assembly part, not a chrome
+// tint applied to the black rear enclosure. Keeping it separate lets the scene,
+// presets, component selection UI, and CAD exporter refer to the same object.
+const reflectiveEdgeMat = new THREE.MeshPhysicalMaterial({
+  color: 0xe3e6ea,
+  emissive: 0x16191d,
+  emissiveIntensity: 0.32,
+  metalness: 1.0,
+  roughness: 0.07,
+  clearcoat: 1.0,
+  clearcoatRoughness: 0.025,
+  side: THREE.DoubleSide,
+});
+const reflectiveEdge = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), reflectiveEdgeMat);
+const reflectiveEdgeB = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), reflectiveEdgeMat);
+const reflectiveEdgeC = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), reflectiveEdgeMat);
+reflectiveEdgeB.visible = false;
+reflectiveEdgeC.visible = false;
+reflectiveEdge.renderOrder = 0;
+reflectiveEdgeB.renderOrder = 0;
+reflectiveEdgeC.renderOrder = 0;
+reflectiveEdge.layers.enable(2);
+reflectiveEdgeB.layers.enable(2);
+reflectiveEdgeC.layers.enable(2);
+camera.layers.enable(2);
+scene.add(reflectiveEdge, reflectiveEdgeB, reflectiveEdgeC);
+
+// Local lights make the mirror edge legible in the actual scene, while the
+// PMREM environment continues to provide moving reflected highlights as the
+// camera orbits. They are deliberately placed outside the artwork silhouette.
+const reflectiveEdgeLightRig = new THREE.Group();
+const reflectiveEdgeLightColors = [0xfff1dc, 0xdcecff, 0xffffff, 0xffddb8, 0xcfe4ff, 0xffffff];
+for (let i = 0; i < reflectiveEdgeLightColors.length; i++) {
+  const light = new THREE.PointLight(reflectiveEdgeLightColors[i], 0, 1600, 1.4);
+  light.userData.baseIntensity = i < 2 ? 3600 : 2400;
+  light.layers.set(2);
+  reflectiveEdgeLightRig.add(light);
+}
+scene.add(reflectiveEdgeLightRig);
+
+// Visible gallery light bars explain the highlights on the mirror-polished
+// edge. They sit on the wall outside the artwork silhouette and stay subtle,
+// so the environment reads as intentional rather than as an empty black void.
+const reflectiveEdgeLightMarkers = new THREE.Group();
+for (let i = 0; i < 4; i++) {
+  const marker = new THREE.Mesh(
+    new THREE.PlaneGeometry(12, 104),
+    new THREE.MeshBasicMaterial({
+      color: i % 2 ? 0xdcecff : 0xffead1,
+      transparent: true,
+      opacity: 0.72,
+      toneMapped: false,
+    })
+  );
+  reflectiveEdgeLightMarkers.add(marker);
+}
+scene.add(reflectiveEdgeLightMarkers);
+
 function ledPanelDiameter(width = state.panelWidth, height = state.panelHeight) {
   return Math.max(1, Math.min(Number(width) || 1, Number(height) || 1));
 }
@@ -1558,13 +1616,118 @@ function makeLedPanelGeometry(shape = state.panelShape, width = state.panelWidth
 }
 
 function makeLedCasingGeometry(shape = state.panelShape, width = state.panelWidth, height = state.panelHeight) {
+  const reveal = Math.max(0, Number(state.reflectiveEdgeReveal) || 0);
+  const depth = Math.max(4, Number(state.casingDepth) || 30);
   if (shape === 'round') {
-    const radius = ledPanelDiameter(width, height) * 0.5;
-    const geometry = new THREE.CylinderGeometry(radius, radius, 30, 128, 1, false);
+    const radius = ledPanelDiameter(width, height) * 0.5 + reveal;
+    const geometry = new THREE.CylinderGeometry(radius, radius, depth, 128, 1, false);
     geometry.rotateX(Math.PI * 0.5);
     return geometry;
   }
-  return new THREE.BoxGeometry(width, height, 30);
+  return new THREE.BoxGeometry(width + reveal * 2, height + reveal * 2, depth);
+}
+
+function makeReflectiveEdgeGeometry(shape, width, height, depth, reveal) {
+  const gap = Math.max(0.5, Number(depth) || 0.5);
+  const edge = Math.max(1, Number(reveal) || 1);
+  const outerW = Math.max(2, Number(width) + edge * 2);
+  const outerH = Math.max(2, Number(height) + edge * 2);
+  const frameWidth = Math.max(3, Math.min(18, edge + 4));
+  const shape2d = new THREE.Shape();
+  if (shape === 'round') {
+    const outerR = ledPanelDiameter(width, height) * 0.5 + edge;
+    const innerR = Math.max(1, ledPanelDiameter(width, height) * 0.5 - frameWidth);
+    shape2d.absarc(0, 0, outerR, 0, Math.PI * 2, false);
+    const hole = new THREE.Path();
+    hole.absarc(0, 0, innerR, 0, Math.PI * 2, true);
+    shape2d.holes.push(hole);
+  } else {
+    shape2d.moveTo(-outerW * 0.5, -outerH * 0.5);
+    shape2d.lineTo( outerW * 0.5, -outerH * 0.5);
+    shape2d.lineTo( outerW * 0.5,  outerH * 0.5);
+    shape2d.lineTo(-outerW * 0.5,  outerH * 0.5);
+    shape2d.closePath();
+    const innerW = Math.max(2, Number(width) - frameWidth * 2);
+    const innerH = Math.max(2, Number(height) - frameWidth * 2);
+    const hole = new THREE.Path();
+    hole.moveTo(-innerW * 0.5, -innerH * 0.5);
+    hole.lineTo(-innerW * 0.5,  innerH * 0.5);
+    hole.lineTo( innerW * 0.5,  innerH * 0.5);
+    hole.lineTo( innerW * 0.5, -innerH * 0.5);
+    hole.closePath();
+    shape2d.holes.push(hole);
+  }
+  const geometry = new THREE.ExtrudeGeometry(shape2d, {
+    depth: gap,
+    bevelEnabled: false,
+    curveSegments: shape === 'round' ? 128 : 4,
+    steps: 1,
+  });
+  // Lens-front coordinates use +Z toward the viewer. The spacer begins at the
+  // lens rear face and extends backwards across the optical air gap.
+  geometry.translate(0, 0, -gap);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function syncReflectiveAssembly() {
+  reflectiveEdgeMat.roughness = Math.max(0.015, Math.min(0.45, Number(state.reflectiveEdgeRoughness) || 0.07));
+  reflectiveEdgeMat.needsUpdate = true;
+  const meshes = [reflectiveEdge, reflectiveEdgeB, reflectiveEdgeC];
+  const panels = [ledPanel, ledPanelB, ledPanelC];
+  const shapes = state.shapeCompare
+    ? ['rectangular', 'round', state.panelShape]
+    : [state.panelShape, state.panelShape, state.panelShape];
+  const comparisonSize = Math.min(state.panelWidth, state.panelHeight);
+  const widths = state.shapeCompare
+    ? [comparisonSize, comparisonSize, state.panelWidth]
+    : [state.panelWidth, state.panelWidth, state.panelWidth];
+  const heights = state.shapeCompare
+    ? [comparisonSize, comparisonSize, state.panelHeight]
+    : [state.panelHeight, state.panelHeight, state.panelHeight];
+  for (let i = 0; i < meshes.length; i++) {
+    const mesh = meshes[i];
+    const panel = panels[i];
+    mesh.geometry.dispose();
+    mesh.geometry = makeReflectiveEdgeGeometry(
+      shapes[i], widths[i], heights[i], state.panelDistance, state.reflectiveEdgeReveal
+    );
+    mesh.position.set(panel.position.x, panel.position.y, panel.position.z + state.panelDistance);
+    mesh.visible = !!state.reflectiveEdgeEnabled && panel.visible && !state.shapeView;
+  }
+
+  const halfW = (state.shapeCompare ? comparisonSize : state.panelWidth) * 0.5;
+  const halfH = (state.shapeCompare ? comparisonSize : state.panelHeight) * 0.5;
+  const primary = ledPanel.position;
+  const zFront = primary.z + state.panelDistance + 85;
+  const positions = [
+    [-halfW - 150, halfH + 90, zFront],
+    [ halfW + 150, halfH + 90, zFront],
+    [-halfW - 170, 0, zFront + 30],
+    [ halfW + 170, 0, zFront + 30],
+    [-halfW * 0.45, -halfH - 130, zFront],
+    [ halfW * 0.45, -halfH - 130, zFront],
+  ];
+  reflectiveEdgeLightRig.children.forEach((light, i) => {
+    const p = positions[i];
+    light.position.set(primary.x + p[0], primary.y + p[1], p[2]);
+    light.intensity = state.reflectiveEdgeEnabled && state.reflectiveEdgeLights
+      ? light.userData.baseIntensity * Math.max(0, Number(state.reflectiveEdgeLightIntensity) || 0)
+      : 0;
+  });
+  reflectiveEdgeLightRig.visible = !!state.reflectiveEdgeEnabled && !!state.reflectiveEdgeLights && !state.shapeView;
+  const markerPositions = [
+    [-halfW - 150, halfH * 0.42],
+    [ halfW + 150, halfH * 0.42],
+    [-halfW - 150, -halfH * 0.42],
+    [ halfW + 150, -halfH * 0.42],
+  ];
+  reflectiveEdgeLightMarkers.children.forEach((marker, i) => {
+    const p = markerPositions[i];
+    marker.position.set(primary.x + p[0], primary.y + p[1], backdrop.position.z + 3);
+    marker.scale.y = Math.max(0.7, Math.min(1.8, halfH / 250));
+  });
+  reflectiveEdgeLightMarkers.visible = !!state.reflectiveEdgeEnabled && !!state.reflectiveEdgeLights && !state.shapeView;
 }
 
 function ledPanelSizeLabel() {
@@ -1828,7 +1991,7 @@ function applyWallAdjust() {
 function syncBackdropZ() {
   if (!backdrop) return;
   const deepest = Math.max(constructionAssemblyDepth(), state.thicknessB || state.thickness || 15);
-  backdrop.position.z = -(deepest + (state.panelDistance || 30) + 30) - 2;
+  backdrop.position.z = -(deepest + (state.panelDistance || 30) + (state.casingDepth || 30)) - 2;
 }
 
 function artworkSceneBounds() {
@@ -3681,6 +3844,14 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   panelHue: 0.0,
   panelSat: 1.0,
   panelDistance: 30,
+  reflectiveEdgeEnabled: true,
+  reflectiveEdgeReveal: 10,
+  reflectiveEdgeRoughness: 0.07,
+  reflectiveEdgeLights: true,
+  reflectiveEdgeLightIntensity: 1.0,
+  casingDepth: 30,
+  ledPanelDepth: 6,
+  wallMountDepth: 6,
   pgLineWidth: 0.06,   // pixelgrid: black gridline thickness (fraction of cell pitch)
   pgFlow: 0.12,        // pixelgrid: drift speed (cells/sec). Default = barely-perceptible drift.
   // --- Generic per-pattern shaping state. Each panel mode interprets these in
@@ -3758,6 +3929,12 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   shapeViewInfo: 'off',
   ecoModeFlag: false,     // mirror of ecoModeActive for GUI binding (auto-synced)
   fpsText: '— fps',       // live readout shown in Actions folder
+  exportPartLens: true,
+  exportPartReflectiveEdge: true,
+  exportPartCasing: true,
+  exportPartLedPanel: true,
+  exportPartWallMount: true,
+  assemblyExportInfo: '5 parts selected · lens verified · enclosure concept CAD',
   bloomStrength: 0.5,
   bloomRadius: 0.7,
   bloomThreshold: 0.82,
@@ -3789,6 +3966,7 @@ state.reset       = () => { resetAll(); };
 state.exportSTL   = () => { doExportSTL(false); };
 state.exportSTLB  = () => { doExportSTL(true); };
 state.exportSTEP  = () => { doExportFabricatorCleanSTEP(); };
+state.exportAssemblySTEP = () => { doExportFabricatorAssemblySTEP(); };
 state.exportSTEPB = () => { doExportSTEP(true); };
 state.screenshot     = () => { doScreenshot(); };
 state.hiResScreenshot = () => { doHiResScreenshot(4); };
@@ -4215,7 +4393,7 @@ function rebuildLenses() {
     });
     [ledCasing, ledCasingB, ledCasingC].forEach((casing, i) => {
       casing.visible = true;
-      casing.position.set((i - 1) * offsetX, 0, -(depths[i] + state.panelDistance) - 15);
+      casing.position.set((i - 1) * offsetX, 0, -(depths[i] + state.panelDistance) - state.casingDepth * 0.5);
       casing.geometry.dispose(); casing.geometry = casingGeo();
     });
     document.getElementById('constructionCompareLegend')?.classList.add('active');
@@ -4268,7 +4446,7 @@ function rebuildLenses() {
     ledPanel.geometry.dispose();
     ledPanel.geometry = makeLedPanelGeometry('rectangular', comparisonSize, comparisonSize);
     ledCasing.visible = true;
-    ledCasing.position.set(squarePosition.x, squarePosition.y, comparisonLedZ - 15);
+    ledCasing.position.set(squarePosition.x, squarePosition.y, comparisonLedZ - state.casingDepth * 0.5);
     ledCasing.geometry.dispose();
     ledCasing.geometry = makeLedCasingGeometry('rectangular', comparisonSize, comparisonSize);
 
@@ -4277,7 +4455,7 @@ function rebuildLenses() {
     ledPanelB.geometry.dispose();
     ledPanelB.geometry = makeLedPanelGeometry('round', comparisonSize, comparisonSize);
     ledCasingB.visible = true;
-    ledCasingB.position.set(roundPosition.x, roundPosition.y, comparisonLedZ - 15);
+    ledCasingB.position.set(roundPosition.x, roundPosition.y, comparisonLedZ - state.casingDepth * 0.5);
     ledCasingB.geometry.dispose();
     ledCasingB.geometry = makeLedCasingGeometry('round', comparisonSize, comparisonSize);
     ledPanelC.visible = false;
@@ -4299,7 +4477,7 @@ function rebuildLenses() {
     ledPanel.position.set(-offsetX, 0, ledZA);
     ledPanel.geometry.dispose();
     ledPanel.geometry = makeLedPanelGeometry();
-    ledCasing.position.set(-offsetX, 0, ledZA - 15);
+    ledCasing.position.set(-offsetX, 0, ledZA - state.casingDepth * 0.5);
     ledCasing.geometry.dispose();
     ledCasing.geometry = makeLedCasingGeometry();
 
@@ -4331,7 +4509,7 @@ function rebuildLenses() {
     ledPanelB.geometry.dispose();
     ledPanelB.geometry = makeLedPanelGeometry();
     ledCasingB.visible = true;
-    ledCasingB.position.set(offsetX, 0, ledZB - 15);
+    ledCasingB.position.set(offsetX, 0, ledZB - state.casingDepth * 0.5);
     ledCasingB.geometry.dispose();
     ledCasingB.geometry = makeLedCasingGeometry();
     ledPanelC.visible = false;
@@ -4351,7 +4529,7 @@ function rebuildLenses() {
     ledPanel.position.set(-offsetX, 0, ledZA);
     ledPanel.geometry.dispose();
     ledPanel.geometry = makeLedPanelGeometry();
-    ledCasing.position.set(-offsetX, 0, ledZA - 15);
+    ledCasing.position.set(-offsetX, 0, ledZA - state.casingDepth * 0.5);
     ledCasing.geometry.dispose();
     ledCasing.geometry = makeLedCasingGeometry();
 
@@ -4376,7 +4554,7 @@ function rebuildLenses() {
     ledPanelB.geometry.dispose();
     ledPanelB.geometry = makeLedPanelGeometry();
     ledCasingB.visible = true;
-    ledCasingB.position.set(offsetX, 0, ledZB - 15);
+    ledCasingB.position.set(offsetX, 0, ledZB - state.casingDepth * 0.5);
     ledCasingB.geometry.dispose();
     ledCasingB.geometry = makeLedCasingGeometry();
     ledPanelC.visible = false;
@@ -4395,7 +4573,7 @@ function rebuildLenses() {
     ledPanel.position.set(0, 0, ledZA);
     ledPanel.geometry.dispose();
     ledPanel.geometry = makeLedPanelGeometry();
-    ledCasing.position.set(0, 0, ledZA - 15);
+    ledCasing.position.set(0, 0, ledZA - state.casingDepth * 0.5);
     ledCasing.geometry.dispose();
     ledCasing.geometry = makeLedCasingGeometry();
     if (lensMeshB) { scene.remove(lensMeshB); lensMeshB.geometry.dispose(); lensMeshB = null; }
@@ -4420,6 +4598,7 @@ function rebuildLenses() {
     setStatus(`${typeA.label}  ·  ${buildLabel}  ·  ${lensFootprintLabel()}  ·  ${ledPanelSizeLabel()}  ·  ${(geoA.attributes.position.count).toLocaleString()} verts${shapeNote}`);
   }
   syncBackdropZ();
+  syncReflectiveAssembly();
   syncHumanScaleFigure();
   updateDimensionOverlay();
   updateSectionProfileOverlay();
@@ -4867,6 +5046,7 @@ function presetSnapshot() {
     'lensType','lensShape','panelWidth','panelHeight','panelShape','resolution','smoothing','shapeScale','flatEdgeWidth','stepExportQuality','stepSurfacePreview','opticalCleanSurface','shapeViewStyle','shapeViewResolution','params',
     'ior','dispersion','thickness','construction','rearDepth','rearScale','rearOffsetX','rearOffsetY','rearMinimumThickness','shellThickness','constructionCompare','shapeCompare','shapeCompareLayout','distortionBoost','roughness','tint',
     'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelSat','panelDistance','pgLineWidth','pgFlow',
+    'reflectiveEdgeEnabled','reflectiveEdgeReveal','reflectiveEdgeRoughness','reflectiveEdgeLights','reflectiveEdgeLightIntensity','casingDepth','ledPanelDepth','wallMountDepth',
     'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
     'sqThickness','sqSoftness','sqMono','sqReverse','sqHueSpread',
     'sqGradient','sqGradA','sqGradB','sqGradC','sqGradAxis','sqGradScale','sqGradFlow',
@@ -4945,6 +5125,14 @@ function applyPreset(p) {
   if (!('patAxis'    in p)) state.patAxis    = 0;
   if (!('panelContrast' in p)) state.panelContrast = 1.0;
   if (!('panelSat'      in p)) state.panelSat      = 1.0;
+  if (!('reflectiveEdgeEnabled' in p)) state.reflectiveEdgeEnabled = true;
+  if (!('reflectiveEdgeReveal' in p)) state.reflectiveEdgeReveal = 10;
+  if (!('reflectiveEdgeRoughness' in p)) state.reflectiveEdgeRoughness = 0.07;
+  if (!('reflectiveEdgeLights' in p)) state.reflectiveEdgeLights = true;
+  if (!('reflectiveEdgeLightIntensity' in p)) state.reflectiveEdgeLightIntensity = 1.0;
+  if (!('casingDepth' in p)) state.casingDepth = 30;
+  if (!('ledPanelDepth' in p)) state.ledPanelDepth = 6;
+  if (!('wallMountDepth' in p)) state.wallMountDepth = 6;
   if (!('shapeScale' in p)) state.shapeScale = 1.0;
   if (!('flatEdgeWidth' in p)) state.flatEdgeWidth = 10;
   state.flatEdgeWidth = Math.max(0, Math.min(80, Number(state.flatEdgeWidth) || 0));
@@ -5741,8 +5929,8 @@ function syncShader() {
   const comparisonDepthB = state.shapeCompare ? constructionAssemblyDepth() : state.thicknessB;
   ledPanel.position.z  = -(constructionAssemblyDepth() + state.panelDistance);
   ledPanelB.position.z = -(comparisonDepthB + state.panelDistance);
-  ledCasing.position.z  = -(constructionAssemblyDepth() + state.panelDistance) - 15;
-  ledCasingB.position.z = -(comparisonDepthB + state.panelDistance) - 15;
+  ledCasing.position.z  = -(constructionAssemblyDepth() + state.panelDistance) - state.casingDepth * 0.5;
+  ledCasingB.position.z = -(comparisonDepthB + state.panelDistance) - state.casingDepth * 0.5;
   syncBackdropZ();
 }
 function syncScene() {
@@ -6173,6 +6361,90 @@ async function doExportFabricatorCleanSTEP() {
     finishStepExportProgress(false);
     showStepExportToast(`Verified STEP failed: ${e.message || 'see console'}`, null, { progress: 0, label: 'Failed' });
     setStatus(`verified STEP failed — ${e.message || 'see console'}`);
+  }
+}
+
+function selectedFabricationParts() {
+  return {
+    lens: !!state.exportPartLens,
+    reflectiveEdge: !!state.exportPartReflectiveEdge,
+    casing: !!state.exportPartCasing,
+    ledPanel: !!state.exportPartLedPanel,
+    wallMount: !!state.exportPartWallMount,
+  };
+}
+
+function updateAssemblyExportInfo() {
+  const selected = selectedFabricationParts();
+  const count = Object.values(selected).filter(Boolean).length;
+  const lensStatus = selected.lens ? 'lens verified' : 'lens excluded';
+  state.assemblyExportInfo = `${count} part${count === 1 ? '' : 's'} selected · ${lensStatus} · enclosure concept CAD`;
+}
+
+async function doExportFabricatorAssemblySTEP() {
+  if (state.construction !== 'solid_flat_back') {
+    setStatus('fabrication assembly currently supports solid flat-backed lenses only');
+    return;
+  }
+  const exportParts = selectedFabricationParts();
+  if (!Object.values(exportParts).some(Boolean)) {
+    showStepExportToast('Select at least one assembly part.');
+    setStatus('assembly export needs at least one selected part');
+    return;
+  }
+  try {
+    if (location.protocol !== 'http:' && location.protocol !== 'https:') {
+      showStepExportToast('Open the Railway app or local server to build the fabrication model.');
+      setStatus('fabrication model export needs the Railway/local server');
+      return;
+    }
+    const remoteCleanStepHost = location.hostname.includes('github.io') || location.hostname.endsWith('.chatgpt.site')
+      ? 'https://prismatica-production.up.railway.app'
+      : '';
+    showStepExportToast('Building selected fabrication model…', null, { progress: 4, label: 'Preparing assembly CAD' });
+    startStepExportProgress();
+    setStatus('building selected lens and enclosure parts…');
+    const cadState = {
+      lensType: state.lensType,
+      lensShape: state.lensShape,
+      panelWidth: state.panelWidth,
+      panelHeight: state.panelHeight,
+      panelShape: state.panelShape,
+      panelDistance: state.panelDistance,
+      reflectiveEdgeReveal: state.reflectiveEdgeReveal,
+      casingDepth: state.casingDepth,
+      ledPanelDepth: state.ledPanelDepth,
+      wallMountDepth: state.wallMountDepth,
+      resolution: state.resolution,
+      smoothing: state.smoothing,
+      shapeScale: state.shapeScale,
+      mirrorLens: state.mirrorLens,
+      flatEdgeWidth: state.flatEdgeWidth,
+      stepExportQuality: state.stepExportQuality,
+      opticalCleanSurface: state.opticalCleanSurface,
+      thickness: state.thickness,
+      exportParts,
+      params: { ...state.params },
+    };
+    const resp = await fetch(`${remoteCleanStepHost}/api/build-clean-step`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state: cadState }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'fabrication model build failed');
+
+    const downloadBase = remoteCleanStepHost ? `${remoteCleanStepHost}/` : location.href;
+    const downloadUrl = new URL(data.zipUrl || data.stepUrl, downloadBase).href;
+    finishStepExportProgress(true);
+    showStepExportToast('Selected fabrication model ready.', downloadUrl, { progress: 100, label: 'Ready', filename: data.filename || '' });
+    setStatus(`fabrication package ready · ${data.filename || 'selected STEP files generated'}`);
+    setTimeout(() => { window.location.href = downloadUrl; }, 150);
+  } catch (e) {
+    console.error(e);
+    finishStepExportProgress(false);
+    showStepExportToast(`Fabrication model failed: ${e.message || 'see console'}`, null, { progress: 0, label: 'Failed' });
+    setStatus(`fabrication model failed · ${e.message || 'see console'}`);
   }
 }
 
@@ -7126,7 +7398,7 @@ normalizeState();
   const ctlPgLineWidth = f2.add(state, 'pgLineWidth', 0.0, 0.4, 0.005).name('grid line thickness').onChange(v => { ledMat.uniforms.uPgLineWidth.value = v; ledMatB.uniforms.uPgLineWidth.value = v; });
   const ctlPgFlow      = f2.add(state, 'pgFlow', -5.0, 5.0, 0.01).name('grid drift speed').onChange(v => { ledMat.uniforms.uPgFlow.value = v; ledMatB.uniforms.uPgFlow.value = v; });
   const ctlMirrorPanel = f2.add(state, 'mirrorPanel').name('mirror H + V (symmetric)').onChange(v => { ledMat.uniforms.uPanelMirror.value = v ? 1 : 0; ledMatB.uniforms.uPanelMirror.value = v ? 1 : 0; });
-  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { const depthA = constructionAssemblyDepth(); const depthB = state.shapeCompare ? depthA : state.thicknessB; ledPanel.position.z = -(depthA + state.panelDistance); ledPanelB.position.z = -(depthB + state.panelDistance); ledCasing.position.z = -(depthA + state.panelDistance) - 15; ledCasingB.position.z = -(depthB + state.panelDistance) - 15; syncBackdropZ(); });
+  const ctlPanelDist   = f2.add(state, 'panelDistance', 0, 400, 0.5).name('gap (mm)').onChange(() => { const depthA = constructionAssemblyDepth(); const depthB = state.shapeCompare ? depthA : state.thicknessB; ledPanel.position.z = -(depthA + state.panelDistance); ledPanelB.position.z = -(depthB + state.panelDistance); ledCasing.position.z = -(depthA + state.panelDistance) - state.casingDepth * 0.5; ledCasingB.position.z = -(depthB + state.panelDistance) - state.casingDepth * 0.5; syncBackdropZ(); syncReflectiveAssembly(); });
   const ctlPanelSmooth = f2.add(state, 'panelSmooth').name('smooth panel (anti-alias)').onChange(v => { ledMat.uniforms.uPanelSmooth.value = v ? 1 : 0; ledMatB.uniforms.uPanelSmooth.value = v ? 1 : 0; });
   const ctlLoadImage   = f2.add(state, 'loadImage').name('load image…');
   const ctlLoadVideo   = f2.add(state, 'loadVideo').name('load video…');
@@ -7222,6 +7494,15 @@ normalizeState();
     state.envIntensity = v;
     scene.environmentIntensity = v;
   });
+  const fMirror = fScene.addFolder('Reflective edge').close();
+  fMirror.add(state, 'reflectiveEdgeEnabled').name('polished steel spacer').onChange(syncReflectiveAssembly);
+  fMirror.add(state, 'reflectiveEdgeReveal', 2, 24, 0.5).name('edge reveal (mm)').onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  fMirror.add(state, 'reflectiveEdgeRoughness', 0.015, 0.45, 0.005).name('finish roughness').onChange(syncReflectiveAssembly);
+  fMirror.add(state, 'reflectiveEdgeLights').name('reflection reveal lights').onChange(syncReflectiveAssembly);
+  fMirror.add(state, 'reflectiveEdgeLightIntensity', 0, 3, 0.05).name('reveal light intensity').onChange(syncReflectiveAssembly);
+  fMirror.add(state, 'casingDepth', 10, 80, 1).name('rear casing depth').onChange(rebuildSoon).onFinishChange(rebuildLenses);
+  fMirror.add(state, 'ledPanelDepth', 3, 20, 0.5).name('LED panel depth').onChange(updateAssemblyExportInfo);
+  fMirror.add(state, 'wallMountDepth', 3, 20, 0.5).name('wall mount depth').onChange(updateAssemblyExportInfo);
   // Lens spin slider removed at Kit's request — driven exclusively by the shot
   // sequence now. The state.lensSpin value stays at 0 by default; legacy saved
   // presets that set it to non-zero will still spin until reset.
@@ -7363,6 +7644,15 @@ normalizeState();
     'high precision': 'high',
   }).name('STEP quality').onChange(rebuildLenses);
   f3.add(state, 'exportSTEP').name('export verified STEP for fabricator');
+  const fAssembly = f3.addFolder('Fabricator 3D model').close();
+  const syncExportSelection = () => { updateAssemblyExportInfo(); guiRefresh(); };
+  fAssembly.add(state, 'exportPartLens').name('include lens').onChange(syncExportSelection);
+  fAssembly.add(state, 'exportPartReflectiveEdge').name('include reflective edge').onChange(syncExportSelection);
+  fAssembly.add(state, 'exportPartCasing').name('include outer casing').onChange(syncExportSelection);
+  fAssembly.add(state, 'exportPartLedPanel').name('include LED panel').onChange(syncExportSelection);
+  fAssembly.add(state, 'exportPartWallMount').name('include wall mount').onChange(syncExportSelection);
+  fAssembly.add(state, 'assemblyExportInfo').name('scope').listen().disable();
+  fAssembly.add(state, 'exportAssemblySTEP').name('export selected STEP package');
   f3.add(state, 'exportSpec').name('📄 export fabrication spec');
   f3.add(state, 'screenshot').name('save screenshot (viewport)');
   f3.add(state, 'hiResScreenshot').name('📸 hi-res PNG (4×)');
@@ -9456,7 +9746,8 @@ window.addEventListener('keydown', (e) => {
 
 window.__prismatica = {
   state, rebuildLenses, scene, camera, renderer, controls,
-  ledMat, ledMatB, lensMaterial, lensMaterialB, LENS_TYPES,
+  ledMat, ledMatB, lensMaterial, lensMaterialB, reflectiveEdge, reflectiveEdgeB, reflectiveEdgeC, LENS_TYPES,
+  syncReflectiveAssembly, selectedFabricationParts, updateAssemblyExportInfo,
   applyShapeView, activeLensResolution, setRearSurfaceComparison, isRearSurfaceComparisonActive,
   lensVertexCount: () => lensMesh?.geometry?.attributes?.position?.count || 0,
   applyPreset, guiRefresh, undoAppState, redoAppState, renderOffline, renderInDedicatedChrome, renderStateSnapshot,

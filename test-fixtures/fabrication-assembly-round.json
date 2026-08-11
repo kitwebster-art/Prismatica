@@ -1,0 +1,34 @@
+{
+  "lensType": "round_sine_lens",
+  "lensShape": "round",
+  "panelShape": "round",
+  "panelWidth": 500,
+  "panelHeight": 500,
+  "resolution": 1,
+  "smoothing": 1,
+  "shapeScale": 1,
+  "mirrorLens": true,
+  "flatEdgeWidth": 10,
+  "stepExportQuality": "standard",
+  "opticalCleanSurface": true,
+  "thickness": 15,
+  "panelDistance": 30,
+  "reflectiveEdgeReveal": 10,
+  "casingDepth": 30,
+  "ledPanelDepth": 6,
+  "wallMountDepth": 6,
+  "exportParts": {
+    "lens": true,
+    "reflectiveEdge": true,
+    "casing": true,
+    "ledPanel": true,
+    "wallMount": true
+  },
+  "params": {
+    "diameter": 500,
+    "amplitude": 26,
+    "wavelength": 44,
+    "phase": 0,
+    "radial_falloff": 0.15
+  }
+}

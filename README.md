@@ -14,7 +14,12 @@ https://kitwebster-art.github.io/Prismatica/
 
 ## Fabricator Export
 
-The Railway app includes the clean STEP exporter used for fabrication review. It generates a native CAD approximation of the current lens settings and packages it with a short README for the fabricator.
+The Railway app includes two related fabrication exports:
+
+- **Verified lens STEP** generates the equation-derived acrylic lens with topology and re-import QA.
+- **Fabricator 3D model** lets the user select the lens, polished reflective edge, outer casing, LED panel space claim, and wall mount. It exports each selected part separately, a combined multi-solid STEP, and a machine-readable assembly manifest.
+
+The lens is verified manufacturing geometry. The reflective edge, casing, LED panel, and wall mount are intentionally labelled as concept CAD until the panel supplier, material gauges, fasteners, electronics, ventilation, cable exits, tolerances, wall type, and load engineering are confirmed.
 
 Critical requirement: the visualiser is the artistic source of truth. Kit uses the visualiser to choose the final lens shape, so the exported STEP file must match the selected visualiser lens as closely as technically possible. The STEP is not a generic smoothed version or an interpretation; its purpose is to give an acrylic manufacturer a usable CAD file for machining, mould-making, or whatever fabrication workflow they choose, while preserving the visualiser lens geometry.
 

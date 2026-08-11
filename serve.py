@@ -407,19 +407,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             qa_name = f"{base}-qa.json"
             pdf_name = f"{base}-validation.pdf"
             preview_name = f"{base}-preview.obj"
+            manifest_name = f"{base}-assembly-manifest.json"
             zip_path = os.path.join(abs_dir, zip_name)
+            package_names = [step_name]
+            manifest_path = os.path.join(abs_dir, manifest_name)
+            component_names = []
+            if os.path.exists(manifest_path):
+                with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+                    manifest = json.load(manifest_file)
+                component_names = [
+                    name for name in manifest.get("files", [])
+                    if isinstance(name, str) and os.path.basename(name) == name
+                ]
+                package_names = component_names + [manifest_name]
+            package_names += [readme_name, qa_name, pdf_name, preview_name]
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                zf.write(step_path, arcname=step_name)
-                zf.write(os.path.join(abs_dir, readme_name), arcname=readme_name)
-                qa_path = os.path.join(abs_dir, qa_name)
-                if os.path.exists(qa_path):
-                    zf.write(qa_path, arcname=qa_name)
-                pdf_path = os.path.join(abs_dir, pdf_name)
-                if os.path.exists(pdf_path):
-                    zf.write(pdf_path, arcname=pdf_name)
-                preview_path = os.path.join(abs_dir, preview_name)
-                if os.path.exists(preview_path):
-                    zf.write(preview_path, arcname=preview_name)
+                added = set()
+                for package_name in package_names:
+                    if package_name in added:
+                        continue
+                    package_path = os.path.join(abs_dir, package_name)
+                    if os.path.exists(package_path):
+                        zf.write(package_path, arcname=package_name)
+                        added.add(package_name)
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -432,6 +442,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "zipPath": zip_path,
                 "filename": zip_name,
                 "stepFilename": step_name,
+                "componentFiles": component_names,
                 "log": result.stdout,
             }).encode("utf-8"))
         except Exception as e:
