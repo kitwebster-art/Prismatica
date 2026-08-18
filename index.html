@@ -598,6 +598,7 @@ body.render-mode canvas { opacity: 0.01 !important; pointer-events: none !import
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1748,9 +1749,10 @@ backdrop.position.z = -77;
 scene.add(backdrop);
 
 // ── Human scale figure -----------------------------------------------------
-// A deliberately neutral, low-poly gallery visitor at 1:1 millimetre scale.
-// The figure is procedural so it stays lightweight and remains available in
-// local, Railway, GitHub Pages, portfolio, still, and video-render contexts.
+// The primary figure is a properly modelled Microsoft Rocketbox visitor. It is
+// bundled locally so Railway, GitHub Pages, stills, and video renders do not
+// depend on a third-party CDN. The old procedural figure remains as a loading
+// and network-failure fallback only.
 const scaleFigureMaterial = new THREE.MeshStandardMaterial({
   color: 0x34373b,
   roughness: 0.92,
@@ -1770,7 +1772,7 @@ function makeScaleFigureLimb(start, end, startRadius, endRadius, material = scal
 
 function createHumanScaleFigure() {
   const figure = new THREE.Group();
-  figure.name = 'human-scale-figure';
+  figure.name = 'procedural-human-scale-fallback';
 
   const pelvis = new THREE.Mesh(new THREE.CylinderGeometry(145, 175, 210, 7), scaleFigureMaterial);
   pelvis.position.y = 900;
@@ -1844,6 +1846,11 @@ function createHumanScaleFigure() {
   chinHand.rotation.z = -0.35;
   figure.add(chinHand);
 
+  figure.rotation.y = -0.12;
+  return figure;
+}
+
+function createScaleFigureShadow() {
   // A subtle contact shadow grounds the figure without introducing a full
   // gallery floor that would compete with the existing wall-material studies.
   const shadowMaterial = new THREE.MeshBasicMaterial({
@@ -1857,15 +1864,74 @@ function createHumanScaleFigure() {
   shadow.rotation.x = -Math.PI * 0.5;
   shadow.scale.y = 0.46;
   shadow.position.set(18, 3, -18);
-  figure.add(shadow);
-
-  figure.rotation.y = -0.12;
-  return figure;
+  return shadow;
 }
 
-const humanScaleFigure = createHumanScaleFigure();
+const humanScaleFigure = new THREE.Group();
+humanScaleFigure.name = 'human-scale-figure';
+const proceduralScaleFigure = createHumanScaleFigure();
+proceduralScaleFigure.add(createScaleFigureShadow());
+humanScaleFigure.add(proceduralScaleFigure);
 humanScaleFigure.visible = false;
 scene.add(humanScaleFigure);
+
+const humanScaleFigureAsset = {
+  source: 'Microsoft Rocketbox Male_Adult_01',
+  license: 'MIT',
+  url: './assets/models/standing-gallery-visitor.glb',
+  loaded: false,
+  fallback: true,
+  heightMm: 1750,
+  meshCount: 0,
+  vertexCount: 0,
+};
+
+new GLTFLoader().load(
+  humanScaleFigureAsset.url,
+  (gltf) => {
+    const model = gltf.scene;
+    model.name = 'rocketbox-standing-gallery-visitor';
+    model.rotation.y = -0.12;
+    let meshCount = 0;
+    let vertexCount = 0;
+    model.traverse((object) => {
+      if (!object.isMesh) return;
+      meshCount += 1;
+      vertexCount += object.geometry?.attributes?.position?.count || 0;
+      object.castShadow = true;
+      object.receiveShadow = true;
+      if (object.material) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => {
+          material.roughness = Math.max(0.68, material.roughness ?? 0.68);
+          material.metalness = 0;
+          material.needsUpdate = true;
+        });
+      }
+    });
+
+    const initialBounds = new THREE.Box3().setFromObject(model);
+    const initialHeight = Math.max(0.001, initialBounds.max.y - initialBounds.min.y);
+    model.scale.setScalar(humanScaleFigureAsset.heightMm / initialHeight);
+    model.updateMatrixWorld(true);
+    const scaledBounds = new THREE.Box3().setFromObject(model);
+    model.position.y -= scaledBounds.min.y;
+
+    humanScaleFigure.clear();
+    humanScaleFigure.add(model, createScaleFigureShadow());
+    humanScaleFigureAsset.loaded = true;
+    humanScaleFigureAsset.fallback = false;
+    humanScaleFigureAsset.meshCount = meshCount;
+    humanScaleFigureAsset.vertexCount = vertexCount;
+    syncHumanScaleFigure();
+    if (state.humanScaleFigure) fitHumanScaleView();
+  },
+  undefined,
+  (error) => {
+    humanScaleFigureAsset.error = error?.message || String(error);
+    console.warn('Realistic human scale model unavailable; using procedural fallback.', error);
+  },
+);
 
 // ── Wall material — procedural gallery surface textures ───────────────────
 // All presets are achromatic grays; the variation is entirely in surface
@@ -3960,7 +4026,7 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   wallMaterial:   'none',  // none | concrete | plaster | polished | cement | limewash
   wallBrightness:  1.0,   // 0 = black → 2 = overexposed; multiplies texture colour
   wallScale:       8,     // texture repeat — lower = larger grain, higher = finer grain
-  humanScaleFigure: true, // 1.75 m low-poly gallery visitor for installation scale
+  humanScaleFigure: true, // 1.75 m realistic gallery visitor for installation scale
   envPreset:    'spots',   // studio | gallery | spots | product
   envIntensity:  1.0,      // scene.environmentIntensity (0–4)
   bloomEnabled: false,
@@ -9827,6 +9893,12 @@ window.__prismatica = {
   syncReflectiveAssembly, selectedFabricationParts, updateAssemblyExportInfo,
   applyShapeView, activeLensResolution, setRearSurfaceComparison, isRearSurfaceComparisonActive,
   lensVertexCount: () => lensMesh?.geometry?.attributes?.position?.count || 0,
+  humanScaleFigure, humanScaleFigureAsset,
+  humanScaleFigureBounds: () => {
+    const bounds = new THREE.Box3().setFromObject(humanScaleFigure);
+    const size = bounds.getSize(new THREE.Vector3());
+    return { min: bounds.min.toArray(), max: bounds.max.toArray(), size: size.toArray() };
+  },
   applyPreset, guiRefresh, undoAppState, redoAppState, renderOffline, renderInDedicatedChrome, renderStateSnapshot,
   addShotToSequence, removeShotFromSequence, replaceShotInSequence,
   loadShotPose, clearShotSequence, moveShotInSequence,

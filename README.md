@@ -12,6 +12,14 @@ The older GitHub Pages version is static and does not include the fabricator-rea
 
 https://kitwebster-art.github.io/Prismatica/
 
+## Human Scale Visitor
+
+The opening scene uses a bundled, naturally posed Microsoft Rocketbox adult
+model at a verified 1.75 m scene height. It replaces the original procedural
+figure made from cylinders and boxes. The old figure is retained only as a
+loading fallback. Model provenance and the MIT licence are recorded beside the
+asset in `assets/models/standing-gallery-visitor.LICENSE.md`.
+
 ## Fabricator Export
 
 The Railway app includes two related fabrication exports:
