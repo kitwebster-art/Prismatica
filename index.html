@@ -2390,6 +2390,60 @@ const LENS_TYPES = {
       };
     },
   },
+  rounded_square_ripple: {
+    label: 'Rounded Square Ripple',
+    params: {
+      wavelength: { value: 30, min: 12, max: 120, step: 1, label: 'band spacing (mm)' },
+      amplitude: { value: 12, min: 0, max: 60, step: 0.5, label: 'relief height (mm)' },
+      superellipse_power: { value: 8, min: 2, max: 20, step: 0.25, label: 'corner squareness' },
+      ripple_profile: { value: 'perfect_s_curve', options: RIPPLE_PROFILE_OPTIONS, label: 'ripple profile' },
+      ripple_curvature: { value: 1.2, min: 0.25, max: 4.0, step: 0.05, label: 'band curvature' },
+      ripple_phase: { value: 0, min: -1, max: 1, step: 0.01, label: 'band phase' },
+      ridge_width: { value: 0.46, min: 0, max: 1, step: 0.01, label: 'ridge width' },
+      ripple_contrast: { value: 1.15, min: 0.1, max: 4, step: 0.01, label: 'ridge contrast' },
+      valley_lift: { value: 0.04, min: 0, max: 0.8, step: 0.01, label: 'valley lift' },
+      edge_taper_width: { value: 26, min: 0, max: 160, step: 1, label: 'edge taper (mm)' },
+      center_bulge_height: { value: 8, min: 0, max: 60, step: 0.5, label: 'centre bulge height (mm)' },
+      center_bulge_radius: { value: 48, min: 5, max: 220, step: 1, label: 'centre bulge radius (mm)' },
+      center_bulge_curve: { value: 1.4, min: 0.25, max: 4, step: 0.05, label: 'centre bulge curve' },
+      center_bulge_shoulder: { value: 0.25, min: 0, max: 1, step: 0.01, label: 'centre shoulder softness' },
+    },
+    // Rounded-square concentric relief derived from one stable superellipse
+    // distance field. The same CPU height function owns the live lens mesh,
+    // refraction normals, section profile and fabrication exports.
+    fn: (p, W, H) => {
+      const TAU = Math.PI * 2;
+      const halfW = W * 0.5, halfH = H * 0.5;
+      const wavelength = Math.max(1, Number(p.wavelength) || 30);
+      const amplitude = Math.max(0, Number(p.amplitude) || 0);
+      const exponent = Math.max(2, Math.min(20, Number(p.superellipse_power) || 8));
+      const curvature = Math.max(0.25, Number(p.ripple_curvature) || 1.2);
+      const profile = p.ripple_profile || 'perfect_s_curve';
+      const phase = TAU * (Number(p.ripple_phase) || 0);
+      const ridgeWidth = Math.max(0, Math.min(1, Number(p.ridge_width) || 0.46));
+      const contrast = Math.max(0.1, Number(p.ripple_contrast) || 1.15);
+      const valleyLift = Math.max(0, Math.min(0.8, Number(p.valley_lift) || 0));
+      const edgeTaper = Math.max(0, Number(p.edge_taper_width) || 0);
+      const superellipseRadius = (x, y) => Math.pow(
+        Math.pow(Math.abs(x), exponent) + Math.pow(Math.abs(y), exponent),
+        1 / exponent,
+      );
+      return (x, y) => {
+        const dEdge = Math.min(halfW - Math.abs(x), halfH - Math.abs(y));
+        if (dEdge <= 0) return 0;
+        const radius = superellipseRadius(x, y);
+        const waveRaw = 0.5 * (1 + Math.cos(TAU * radius / wavelength + phase));
+        const wave = shapeRippleValue01(
+          rippleProfile01(waveRaw, curvature, profile),
+          ridgeWidth,
+          contrast,
+          valleyLift,
+        );
+        const edgeEnv = edgeTaper <= 0 ? 1 : smootherStep01(dEdge / edgeTaper);
+        return amplitude * wave * edgeEnv + centerBulgeHeight(radius, p);
+      };
+    },
+  },
   gravitational_wave: {
     label: 'Gravitational Wave',
     params: {
@@ -4873,6 +4927,29 @@ const GRAVITATIONAL_WAVE_PRESETS = {
 };
 
 const LOW_PROFILE_RIPPLE_PRESETS = {
+  'square lens · rounded concentric': {
+    lensType: 'rounded_square_ripple', lensShape: 'standard', panelShape: 'rectangular',
+    panelWidth: 500, panelHeight: 500, resolution: 1.5,
+    smoothing: 1, shapeScale: 1, flatEdgeWidth: 8, stepExportQuality: 'high',
+    stepSurfacePreview: true, opticalCleanSurface: true, shapeViewStyle: 'smooth',
+    params: {
+      wavelength: 30, amplitude: 12, superellipse_power: 8,
+      ripple_profile: 'perfect_s_curve', ripple_curvature: 1.2, ripple_phase: 0,
+      ridge_width: 0.46, ripple_contrast: 1.15, valley_lift: 0.04,
+      edge_taper_width: 26, center_bulge_height: 8, center_bulge_radius: 48,
+      center_bulge_curve: 1.4, center_bulge_shoulder: 0.25,
+    },
+    construction: 'solid_flat_back', shellThickness: 3,
+    ior: 1.49, dispersion: 2.5, thickness: 10, distortionBoost: 1.15, roughness: 0, tint: '#ffffff',
+    panelMode: 4, panelScale: 36, panelSpeed: 0.12, panelBrightness: 1.45, panelContrast: 1.38,
+    panelHue: 0.61, panelSat: 0.58, panelDistance: 40, pgLineWidth: 0.08, pgFlow: -0.05,
+    patSharp: 0.82, patScale: 1.28, patDetail: 0.7, patDistort: 0.16, patAxis: 2,
+    mirrorPanel: true, mirrorLens: true, panelSmooth: true, bgColor: '#050505',
+    wallMaterial: 'polished', wallBrightness: 0.72, wallScale: 18,
+    envPreset: 'gallery', envIntensity: 0.58, bloomEnabled: false,
+    lookSaturation: 1, lookContrast: 1.04, lookVignette: 0.02, lookGrain: 0,
+    lookSharpen: 0, lookLutMix: 1, lookLutPreset: 'none', compare: false,
+  },
   'round sine ripple': {
     lensType: 'round_sine_lens', panelWidth: 500, panelHeight: 500, resolution: 0.75,
     smoothing: 0, shapeScale: 1, flatEdgeWidth: 0, stepExportQuality: 'standard',
