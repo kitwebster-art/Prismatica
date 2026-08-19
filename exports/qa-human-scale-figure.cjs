@@ -25,6 +25,18 @@ async function main() {
     const figure = p.humanScaleFigure;
     const bounds = p.humanScaleFigureBounds();
     const model = figure.getObjectByName('rocketbox-standing-gallery-visitor');
+    const materials = [];
+    model?.traverse((object) => {
+      if (!object.isMesh) return;
+      for (const material of (Array.isArray(object.material) ? object.material : [object.material])) {
+        materials.push({
+          name: material.name,
+          color: material.color?.getHexString() ?? null,
+          emissive: material.emissive?.getHexString() ?? null,
+          emissiveIntensity: material.emissiveIntensity ?? null,
+        });
+      }
+    });
     return {
       asset: { ...p.humanScaleFigureAsset },
       visible: figure.visible,
@@ -37,6 +49,7 @@ async function main() {
       cameraShot: { ...p.humanScaleCameraShot },
       artworkScreenBounds: p.humanScaleArtworkScreenBounds(),
       figureScreenBounds: p.humanScaleFigureScreenBounds(),
+      materials,
     };
   });
 
@@ -68,6 +81,13 @@ async function main() {
   }
   if (report.asset.meshCount < 1 || report.asset.vertexCount < 1000) {
     throw new Error(`Visitor geometry is unexpectedly coarse: ${JSON.stringify(report)}`);
+  }
+  if (!report.asset.source.includes('Male_Adult_04') || !report.asset.pose.includes('chin')) {
+    throw new Error(`Designer visitor identity or considering pose metadata is missing: ${JSON.stringify(report)}`);
+  }
+  const bodyMaterial = report.materials.find((material) => material.name.includes('body'));
+  if (!bodyMaterial || bodyMaterial.emissive === '000000' || bodyMaterial.emissiveIntensity < 0.2) {
+    throw new Error(`Neutral outfit detail lift is not active: ${JSON.stringify(report)}`);
   }
   if (report.asset.facingDot < 0.999) {
     throw new Error(`Visitor is not facing the artwork: ${JSON.stringify(report)}`);

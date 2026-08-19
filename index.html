@@ -1875,10 +1875,23 @@ humanScaleFigure.add(proceduralScaleFigure);
 humanScaleFigure.visible = false;
 scene.add(humanScaleFigure);
 
+// A neutral, figure-only gallery fill keeps dark clothing and facial gesture
+// readable without changing the optical lighting on the sculpture itself.
+camera.layers.enable(3);
+const humanScaleFill = new THREE.HemisphereLight(0xf4f7ff, 0x343944, 1.35);
+humanScaleFill.layers.set(3);
+const humanScaleKeyTarget = new THREE.Object3D();
+const humanScaleKey = new THREE.DirectionalLight(0xfff8ee, 1.15);
+humanScaleKey.layers.set(3);
+humanScaleKey.target = humanScaleKeyTarget;
+scene.add(humanScaleFill, humanScaleKey, humanScaleKeyTarget);
+
 const humanScaleFigureAsset = {
-  source: 'Microsoft Rocketbox Male_Adult_01',
+  source: 'Microsoft Rocketbox Male_Adult_04',
   license: 'MIT',
   url: './assets/models/standing-gallery-visitor.glb',
+  wardrobe: 'black leather jacket, graphic top, cargo trousers, white sneakers',
+  pose: 'considering artwork, right hand at chin, left arm relaxed',
   loaded: false,
   fallback: true,
   heightMm: 1750,
@@ -1893,6 +1906,50 @@ const humanScaleCameraShot = {
   sideAngleDeg: 0,
 };
 
+function gradeHumanScaleTexture(sourceTexture, role) {
+  if (!sourceTexture?.image) return sourceTexture;
+  const image = sourceTexture.image;
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+  const data = pixels.data;
+  for (let i = 0; i < data.length; i += 4) {
+    let r = data[i] / 255;
+    let g = data[i + 1] / 255;
+    let b = data[i + 2] / 255;
+    if (role === 'body') {
+      // Lift the leather jacket and dark trousers without flattening their
+      // baked folds, then cool the palette very slightly.
+      r = Math.pow(r, 0.66) * 0.96;
+      g = Math.pow(g, 0.66) * 1.00;
+      b = Math.pow(b, 0.66) * 1.05;
+    } else {
+      // The source skin is warm. Reduce saturation and add a restrained cool
+      // balance so it stays human under the blue artwork light rather than red.
+      const luminance = r * 0.299 + g * 0.587 + b * 0.114;
+      r = (luminance + (r - luminance) * 0.72) * 0.93;
+      g = (luminance + (g - luminance) * 0.72) * 1.00;
+      b = (luminance + (b - luminance) * 0.72) * 1.09;
+    }
+    data[i] = Math.min(255, Math.round(r * 255));
+    data[i + 1] = Math.min(255, Math.round(g * 255));
+    data[i + 2] = Math.min(255, Math.round(b * 255));
+  }
+  context.putImageData(pixels, 0, 0);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = sourceTexture.colorSpace;
+  texture.flipY = sourceTexture.flipY;
+  texture.wrapS = sourceTexture.wrapS;
+  texture.wrapT = sourceTexture.wrapT;
+  texture.magFilter = sourceTexture.magFilter;
+  texture.minFilter = sourceTexture.minFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 new GLTFLoader().load(
   humanScaleFigureAsset.url,
   (gltf) => {
@@ -1904,6 +1961,7 @@ new GLTFLoader().load(
       if (!object.isMesh) return;
       meshCount += 1;
       vertexCount += object.geometry?.attributes?.position?.count || 0;
+      object.layers.enable(3);
       object.castShadow = true;
       object.receiveShadow = true;
       if (object.material) {
@@ -1911,6 +1969,23 @@ new GLTFLoader().load(
         materials.forEach((material) => {
           material.roughness = Math.max(0.68, material.roughness ?? 0.68);
           material.metalness = 0;
+          const materialName = material.name.toLowerCase();
+          if (materialName.includes('body')) {
+            // Preserve the dark designer outfit while lifting enough texture
+            // detail for the jacket, graphic top and trousers to read.
+            material.map = gradeHumanScaleTexture(material.map, 'body');
+            material.emissive = new THREE.Color(0x20242b);
+            material.emissiveMap = material.map || null;
+            material.emissiveIntensity = 0.24;
+          } else if (materialName.includes('head')) {
+            // Counter the warm source texture and the blue artwork spill with a
+            // neutral gallery tint, avoiding the former red/black silhouette.
+            material.map = gradeHumanScaleTexture(material.map, 'head');
+            material.color.setRGB(0.96, 1.00, 1.04);
+            material.emissive = new THREE.Color(0x181c22);
+            material.emissiveMap = material.map || null;
+            material.emissiveIntensity = 0.12;
+          }
           material.needsUpdate = true;
         });
       }
@@ -2103,6 +2178,16 @@ function syncHumanScaleFigure() {
   const artwork = artworkSceneBounds();
   const floorY = -1450;
   humanScaleFigure.position.set(artwork.minX - 60, floorY, 380);
+  humanScaleKeyTarget.position.set(
+    humanScaleFigure.position.x,
+    humanScaleFigure.position.y + 1120,
+    humanScaleFigure.position.z,
+  );
+  humanScaleKey.position.set(
+    humanScaleKeyTarget.position.x + 900,
+    humanScaleKeyTarget.position.y + 650,
+    humanScaleKeyTarget.position.z + 1200,
+  );
   const model = humanScaleFigure.getObjectByName('rocketbox-standing-gallery-visitor');
   if (model) {
     // Rocketbox's baked visitor faces along local +X. Aim that horizontal axis

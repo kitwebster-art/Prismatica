@@ -1,11 +1,15 @@
 # Standing Gallery Visitor
 
-This bundled model is derived from `Male_Adult_01` in the Microsoft Rocketbox
+This bundled model is derived from `Male_Adult_04` in the Microsoft Rocketbox
 Avatar Library. Its relaxed pose uses a frame from `m_idle_neutral_01` in the
 same library. Textures were reduced for browser delivery and the rig was baked
 to a static mesh for Prismatica.
 
 Source: https://github.com/microsoft/Microsoft-Rocketbox
+
+The source rig was posed specifically for Prismatica with the right hand at the
+chin and the left arm relaxed. The exported GLB freezes that
+pose and includes no animation or rig.
 
 ## MIT License
 

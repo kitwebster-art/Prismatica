@@ -7,9 +7,9 @@ Run with Blender in background mode, for example:
     --source-dir /path/to/rocketbox-source \
     --output assets/models/standing-gallery-visitor.glb
 
-The source directory must contain Male_Adult_01.fbx, the three referenced
+The source directory must contain the selected avatar FBX, its three referenced
 colour/opacity textures, and m_idle_neutral_01.max.fbx. The final GLB freezes
-one relaxed frame of the idle animation and contains no animation or rig.
+an authored gallery-viewing pose and contains no animation or rig.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--avatar-name", default="Male_Adult_04")
     parser.add_argument("--texture-size", type=int, default=1024)
     return parser.parse_args(argv)
 
@@ -57,10 +58,15 @@ def existing_image_nodes(material: bpy.types.Material):
 def optimise_textures(source_dir: Path, texture_size: int) -> None:
     derivatives = source_dir / "derived"
     derivatives.mkdir(exist_ok=True)
+    source_textures = {
+        "body": next(source_dir.glob("*_body_color.tga")),
+        "head": next(source_dir.glob("*_head_color.tga")),
+        "opacity": next(source_dir.glob("*_opacity_color.tga")),
+    }
     formats = {
-        "m002_body_color.tga": ("m002_body_color.jpg", "JPEG"),
-        "m002_head_color.tga": ("m002_head_color.jpg", "JPEG"),
-        "m002_opacity_color.tga": ("m002_opacity_color.png", "PNG"),
+        source_textures["body"].name: (f"{source_textures['body'].stem}.jpg", "JPEG"),
+        source_textures["head"].name: (f"{source_textures['head'].stem}.jpg", "JPEG"),
+        source_textures["opacity"].name: (f"{source_textures['opacity'].stem}.png", "PNG"),
     }
     converted = {}
     for source_name, (output_name, output_format) in formats.items():
@@ -83,16 +89,32 @@ def optimise_textures(source_dir: Path, texture_size: int) -> None:
                 material.node_tree.nodes.remove(node)
 
 
-def import_avatar(source_dir: Path):
+def import_avatar(source_dir: Path, avatar_name: str):
     before = set(bpy.context.scene.objects)
-    bpy.ops.import_scene.fbx(filepath=str(source_dir / "Male_Adult_01.fbx"))
+    bpy.ops.import_scene.fbx(filepath=str(source_dir / f"{avatar_name}.fbx"))
     imported = set(bpy.context.scene.objects) - before
     armature = next(obj for obj in imported if obj.type == "ARMATURE")
     mesh = next(obj for obj in imported if obj.type == "MESH")
     return armature, mesh, imported
 
 
-def apply_relaxed_pose(source_dir: Path, avatar_armature, avatar_mesh, avatar_objects) -> None:
+def add_ik_target(armature, bone_name: str, target_location, pole_location) -> set:
+    target = bpy.data.objects.new(f"{bone_name}-target", None)
+    pole = bpy.data.objects.new(f"{bone_name}-pole", None)
+    bpy.context.scene.collection.objects.link(target)
+    bpy.context.scene.collection.objects.link(pole)
+    target.location = target_location
+    pole.location = pole_location
+    constraint = armature.pose.bones[bone_name].constraints.new("IK")
+    constraint.target = target
+    constraint.pole_target = pole
+    constraint.chain_count = 3
+    constraint.use_tail = True
+    constraint.iterations = 80
+    return {target, pole}
+
+
+def apply_considering_pose(source_dir: Path, avatar_armature, avatar_mesh, avatar_objects) -> None:
     before = set(bpy.context.scene.objects)
     bpy.ops.import_scene.fbx(filepath=str(source_dir / "m_idle_neutral_01.max.fbx"))
     animation_objects = set(bpy.context.scene.objects) - before
@@ -107,6 +129,18 @@ def apply_relaxed_pose(source_dir: Path, avatar_armature, avatar_mesh, avatar_ob
     bpy.context.scene.frame_set(round(start + (end - start) * 0.37))
     bpy.context.view_layer.update()
 
+    # An authored, readable gallery pose: the right hand rests at the chin with
+    # the elbow kept close to the torso, while the left arm retains the relaxed
+    # idle pose. The avatar faces local -Y before glTF axis conversion.
+    pose_helpers = set()
+    pose_helpers |= add_ik_target(
+        avatar_armature,
+        "Bip01 R Hand",
+        (-0.065, -0.205, 1.545),
+        (-0.38, -0.03, 1.31),
+    )
+    bpy.context.view_layer.update()
+
     bpy.ops.object.select_all(action="DESELECT")
     avatar_mesh.select_set(True)
     bpy.context.view_layer.objects.active = avatar_mesh
@@ -114,7 +148,7 @@ def apply_relaxed_pose(source_dir: Path, avatar_armature, avatar_mesh, avatar_ob
         if modifier.type == "ARMATURE":
             bpy.ops.object.modifier_apply(modifier=modifier.name)
 
-    for obj in animation_objects | (avatar_objects - {avatar_mesh}):
+    for obj in animation_objects | pose_helpers | (avatar_objects - {avatar_mesh}):
         bpy.data.objects.remove(obj, do_unlink=True)
 
 
@@ -155,9 +189,9 @@ def main() -> None:
     source_dir = args.source_dir.resolve()
     output = args.output.resolve()
     clear_scene()
-    armature, mesh, avatar_objects = import_avatar(source_dir)
+    armature, mesh, avatar_objects = import_avatar(source_dir, args.avatar_name)
     optimise_textures(source_dir, args.texture_size)
-    apply_relaxed_pose(source_dir, armature, mesh, avatar_objects)
+    apply_considering_pose(source_dir, armature, mesh, avatar_objects)
     prepare_mesh(mesh)
     export_glb(mesh, output)
     print(f"Built {output} ({output.stat().st_size} bytes)")
