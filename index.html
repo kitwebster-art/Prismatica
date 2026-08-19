@@ -1884,6 +1884,9 @@ const humanScaleFigureAsset = {
   heightMm: 1750,
   meshCount: 0,
   vertexCount: 0,
+  facingTarget: [0, 0, 0],
+  facingYaw: 0,
+  facingDot: 0,
 };
 
 new GLTFLoader().load(
@@ -1891,7 +1894,6 @@ new GLTFLoader().load(
   (gltf) => {
     const model = gltf.scene;
     model.name = 'rocketbox-standing-gallery-visitor';
-    model.rotation.y = -0.12;
     let meshCount = 0;
     let vertexCount = 0;
     model.traverse((object) => {
@@ -2091,6 +2093,23 @@ function syncHumanScaleFigure() {
   const artwork = artworkSceneBounds();
   const floorY = -1450;
   humanScaleFigure.position.set(artwork.minX - 360, floorY, 380);
+  const model = humanScaleFigure.getObjectByName('rocketbox-standing-gallery-visitor');
+  if (model) {
+    // Rocketbox's baked visitor faces along local +X. Aim that horizontal axis
+    // at the centre of the artwork, so the person reads as viewing the work
+    // rather than presenting to the camera.
+    const targetX = (artwork.minX + artwork.maxX) * 0.5;
+    const targetZ = 0;
+    const towardArtwork = new THREE.Vector2(
+      targetX - humanScaleFigure.position.x,
+      targetZ - humanScaleFigure.position.z,
+    ).normalize();
+    model.rotation.y = Math.atan2(-towardArtwork.y, towardArtwork.x);
+    const forward = new THREE.Vector2(Math.cos(model.rotation.y), -Math.sin(model.rotation.y));
+    humanScaleFigureAsset.facingTarget = [targetX, 0, targetZ];
+    humanScaleFigureAsset.facingYaw = model.rotation.y;
+    humanScaleFigureAsset.facingDot = forward.dot(towardArtwork);
+  }
 }
 
 function fitHumanScaleView() {

@@ -32,6 +32,7 @@ async function main() {
       fallbackPresent: !!figure.getObjectByName('procedural-human-scale-fallback'),
       boundsMm: bounds.size,
       modelPositionY: model?.position.y ?? null,
+      facingYaw: model?.rotation.y ?? null,
     };
   });
 
@@ -44,6 +45,9 @@ async function main() {
   }
   if (report.asset.meshCount < 1 || report.asset.vertexCount < 1000) {
     throw new Error(`Visitor geometry is unexpectedly coarse: ${JSON.stringify(report)}`);
+  }
+  if (report.asset.facingDot < 0.999) {
+    throw new Error(`Visitor is not facing the artwork: ${JSON.stringify(report)}`);
   }
   if (report.boundsMm[1] < 1740 || report.boundsMm[1] > 1765) {
     throw new Error(`Visitor is not at the intended 1.75 m scale: ${JSON.stringify(report)}`);
