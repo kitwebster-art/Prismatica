@@ -1888,6 +1888,10 @@ const humanScaleFigureAsset = {
   facingYaw: 0,
   facingDot: 0,
 };
+const humanScaleCameraShot = {
+  owner: 'fitHumanScaleView',
+  sideAngleDeg: 0,
+};
 
 new GLTFLoader().load(
   humanScaleFigureAsset.url,
@@ -2089,10 +2093,16 @@ function artworkSceneBounds() {
 function syncHumanScaleFigure() {
   if (!humanScaleFigure) return;
   humanScaleFigure.visible = !!state.humanScaleFigure;
-  if (!humanScaleFigure.visible) return;
+  if (!humanScaleFigure.visible) {
+    if (camera.fov !== 38) {
+      camera.fov = 38;
+      camera.updateProjectionMatrix();
+    }
+    return;
+  }
   const artwork = artworkSceneBounds();
   const floorY = -1450;
-  humanScaleFigure.position.set(artwork.minX - 360, floorY, 380);
+  humanScaleFigure.position.set(artwork.minX - 60, floorY, 380);
   const model = humanScaleFigure.getObjectByName('rocketbox-standing-gallery-visitor');
   if (model) {
     // Rocketbox's baked visitor faces along local +X. Aim that horizontal axis
@@ -2116,29 +2126,93 @@ function fitHumanScaleView() {
   if (!state.humanScaleFigure) return;
   syncHumanScaleFigure();
   const artwork = artworkSceneBounds();
-  const figureMinX = humanScaleFigure.position.x - 250;
-  const figureMaxX = humanScaleFigure.position.x + 250;
-  const minX = Math.min(artwork.minX, figureMinX);
-  const maxX = Math.max(artwork.maxX, figureMaxX);
-  const minY = Math.min(artwork.minY, humanScaleFigure.position.y);
-  const maxY = Math.max(artwork.maxY, humanScaleFigure.position.y + 1780);
-  const width = maxX - minX;
-  const height = maxY - minY;
-  const centreX = (minX + maxX) * 0.5;
-  const centreY = (minY + maxY) * 0.5;
+  const width = artwork.maxX - artwork.minX;
+  const height = artwork.maxY - artwork.minY;
+  const centreX = (artwork.minX + artwork.maxX) * 0.5;
+  const centreY = (artwork.minY + artwork.maxY) * 0.5;
+  // A portrait-like focal length lets the camera move outside the visitor's
+  // full pose while retaining the close sculpture crop.
+  camera.fov = 22;
+  camera.updateProjectionMatrix();
   const vfov = THREE.MathUtils.degToRad(camera.fov);
   const usableWidth = isPortfolioEmbed
     ? Math.max(360, window.innerWidth)
     : Math.max(360, window.innerWidth - 620);
   const usableAspect = usableWidth / Math.max(360, window.innerHeight);
-  const distanceForHeight = height / (2 * Math.tan(vfov * 0.5));
-  const distanceForWidth = width / (2 * Math.tan(vfov * 0.5) * Math.max(0.4, usableAspect));
-  const distance = Math.max(distanceForHeight, distanceForWidth) * 1.1;
-  controls.target.set(centreX, centreY, 0);
-  camera.position.set(centreX + 90, centreY + 70, distance + 420);
+
+  // The sculpture owns the opening frame. The visitor remains at the left edge
+  // as a partial scale cue instead of widening the camera to include his body.
+  // A modest three-quarter view reveals the physical lens/casing depth without
+  // making the front pattern difficult to judge.
+  const targetHeightOccupancy = 0.60;
+  const targetWidthOccupancy = 0.72;
+  const distanceForHeight = height / (2 * Math.tan(vfov * 0.5) * targetHeightOccupancy);
+  const distanceForWidth = width / (
+    2 * Math.tan(vfov * 0.5) * Math.max(0.4, usableAspect) * targetWidthOccupancy
+  );
+  const forwardDistance = Math.max(distanceForHeight, distanceForWidth);
+  const sideAngleDeg = 16;
+  const sideOffset = forwardDistance * Math.tan(THREE.MathUtils.degToRad(sideAngleDeg));
+  controls.target.set(centreX, centreY - height * 0.02, 0);
+  camera.position.set(
+    centreX + sideOffset,
+    controls.target.y + height * 0.07,
+    forwardDistance,
+  );
   camera.lookAt(controls.target);
   controls.update();
+  Object.assign(humanScaleCameraShot, {
+    owner: 'fitHumanScaleView',
+    sideAngleDeg,
+    targetHeightOccupancy,
+    targetWidthOccupancy,
+    artworkWidthMm: width,
+    artworkHeightMm: height,
+    forwardDistanceMm: forwardDistance,
+    target: controls.target.toArray(),
+    position: camera.position.toArray(),
+  });
   liveSettleFrames = Math.max(liveSettleFrames, 2);
+}
+
+function humanScaleArtworkScreenBounds() {
+  const artwork = artworkSceneBounds();
+  const corners = [
+    new THREE.Vector3(artwork.minX, artwork.minY, 0),
+    new THREE.Vector3(artwork.maxX, artwork.minY, 0),
+    new THREE.Vector3(artwork.maxX, artwork.maxY, 0),
+    new THREE.Vector3(artwork.minX, artwork.maxY, 0),
+  ].map((point) => point.project(camera));
+  const xs = corners.map((point) => point.x);
+  const ys = corners.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return {
+    minNdc: [minX, minY],
+    maxNdc: [maxX, maxY],
+    widthOccupancy: (maxX - minX) * 0.5,
+    heightOccupancy: (maxY - minY) * 0.5,
+  };
+}
+
+function humanScaleFigureScreenBounds() {
+  const bounds = new THREE.Box3().setFromObject(humanScaleFigure);
+  const corners = [];
+  for (const x of [bounds.min.x, bounds.max.x]) {
+    for (const y of [bounds.min.y, bounds.max.y]) {
+      for (const z of [bounds.min.z, bounds.max.z]) {
+        corners.push(new THREE.Vector3(x, y, z).project(camera));
+      }
+    }
+  }
+  const xs = corners.map((point) => point.x);
+  const ys = corners.map((point) => point.y);
+  return {
+    minNdc: [Math.min(...xs), Math.min(...ys)],
+    maxNdc: [Math.max(...xs), Math.max(...ys)],
+  };
 }
 
 // -------------------------------------------------------------------------
@@ -9912,7 +9986,8 @@ window.__prismatica = {
   syncReflectiveAssembly, selectedFabricationParts, updateAssemblyExportInfo,
   applyShapeView, activeLensResolution, setRearSurfaceComparison, isRearSurfaceComparisonActive,
   lensVertexCount: () => lensMesh?.geometry?.attributes?.position?.count || 0,
-  humanScaleFigure, humanScaleFigureAsset,
+  humanScaleFigure, humanScaleFigureAsset, humanScaleCameraShot,
+  humanScaleArtworkScreenBounds, humanScaleFigureScreenBounds,
   humanScaleFigureBounds: () => {
     const bounds = new THREE.Box3().setFromObject(humanScaleFigure);
     const size = bounds.getSize(new THREE.Vector3());
