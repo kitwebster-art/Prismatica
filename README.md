@@ -12,15 +12,12 @@ The older GitHub Pages version is static and does not include the fabricator-rea
 
 https://kitwebster-art.github.io/Prismatica/
 
-## Human Scale Visitor
+## Scene direction
 
-The opening scene uses a bundled Microsoft Rocketbox adult model at a verified
-1.75 m scene height. Male_Adult_04 wears a black leather jacket, graphic top,
-cargo trousers and white sneakers, and is frozen in an authored gallery pose
-with one hand at his chin and the other arm relaxed. It replaces the original
-procedural figure made from cylinders and boxes. The old figure is retained
-only as a loading fallback. Model provenance and the MIT licence are recorded
-beside the asset in `assets/models/standing-gallery-visitor.LICENSE.md`.
+The active visualizer presents the sculpture without a human scale figure.
+Legacy visitor code and its licensed source asset remain archived in the
+repository, but the model is not added to the scene, loaded by the browser or
+exposed as a visualizer control.
 
 ## Fabricator Export
 

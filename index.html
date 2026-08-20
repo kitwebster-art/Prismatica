@@ -598,7 +598,6 @@ body.render-mode canvas { opacity: 0.01 !important; pointer-events: none !import
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -613,6 +612,7 @@ const isPortfolioEmbed = new URLSearchParams(location.search).get('embed') === '
 const isCompactPortfolioEmbed = isPortfolioEmbed && window.matchMedia('(max-width: 768px)').matches;
 const portfolioRenderQuality = isCompactPortfolioEmbed ? 'portfolio-mobile' : 'portfolio-high';
 const portfolioMeshResolution = isCompactPortfolioEmbed ? 1.5 : 1.0;
+const HUMAN_SCALE_FIGURE_ENABLED = false;
 const portfolioSmoothing = isCompactPortfolioEmbed ? 4 : 6;
 document.body.classList.toggle('portfolio-embed', isPortfolioEmbed);
 
@@ -1873,7 +1873,7 @@ const proceduralScaleFigure = createHumanScaleFigure();
 proceduralScaleFigure.add(createScaleFigureShadow());
 humanScaleFigure.add(proceduralScaleFigure);
 humanScaleFigure.visible = false;
-scene.add(humanScaleFigure);
+if (HUMAN_SCALE_FIGURE_ENABLED) scene.add(humanScaleFigure);
 
 // A neutral, figure-only gallery fill keeps dark clothing and facial gesture
 // readable without changing the optical lighting on the sculpture itself.
@@ -1884,7 +1884,9 @@ const humanScaleKeyTarget = new THREE.Object3D();
 const humanScaleKey = new THREE.DirectionalLight(0xfff8ee, 1.15);
 humanScaleKey.layers.set(3);
 humanScaleKey.target = humanScaleKeyTarget;
-scene.add(humanScaleFill, humanScaleKey, humanScaleKeyTarget);
+if (HUMAN_SCALE_FIGURE_ENABLED) {
+  scene.add(humanScaleFill, humanScaleKey, humanScaleKeyTarget);
+}
 
 const humanScaleFigureAsset = {
   source: 'Microsoft Rocketbox Male_Adult_04',
@@ -1950,7 +1952,7 @@ function gradeHumanScaleTexture(sourceTexture, role) {
   return texture;
 }
 
-new GLTFLoader().load(
+if (HUMAN_SCALE_FIGURE_ENABLED) new GLTFLoader().load(
   humanScaleFigureAsset.url,
   (gltf) => {
     const model = gltf.scene;
@@ -4204,7 +4206,7 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   wallMaterial:   'none',  // none | concrete | plaster | polished | cement | limewash
   wallBrightness:  1.0,   // 0 = black → 2 = overexposed; multiplies texture colour
   wallScale:       8,     // texture repeat — lower = larger grain, higher = finer grain
-  humanScaleFigure: true, // 1.75 m realistic gallery visitor for installation scale
+  humanScaleFigure: false, // retired from the active visualizer
   envPreset:    'spots',   // studio | gallery | spots | product
   envIntensity:  1.0,      // scene.environmentIntensity (0–4)
   bloomEnabled: false,
@@ -5424,7 +5426,7 @@ function applyPreset(p) {
   if (!('panelShape' in p)) state.panelShape = 'rectangular';
   if (!['rectangular', 'round'].includes(state.panelShape)) state.panelShape = 'rectangular';
   if (state.panelShape === 'round') state.panelHeight = state.panelWidth;
-  if (!('humanScaleFigure' in p)) state.humanScaleFigure = true;
+  state.humanScaleFigure = false;
   if (isPortfolioEmbed) {
     state.resolution = Math.max(portfolioMeshResolution, Number(state.resolution) || portfolioMeshResolution);
     state.smoothing = Math.min(
@@ -7526,6 +7528,7 @@ function normalizeState() {
   for (const k in d) {
     if (state[k] === undefined) state[k] = d[k];
   }
+  state.humanScaleFigure = false;
 }
 normalizeState();
 
@@ -7805,10 +7808,6 @@ normalizeState();
   }).name('wall material').onChange(v => { state.wallMaterial = v; applyWallMaterial(v); });
   fScene.add(state, 'wallBrightness', 0.0, 2.0, 0.01).name('wall brightness').onChange(applyWallAdjust);
   fScene.add(state, 'wallScale', 2, 24, 0.5).name('texture scale (grain)').onChange(applyWallAdjust);
-  fScene.add(state, 'humanScaleFigure').name('human scale figure').onChange((visible) => {
-    syncHumanScaleFigure();
-    if (visible) fitHumanScaleView();
-  });
   const fEnv = fScene.addFolder('Environment').close();
   fEnv.add(state, 'envPreset', ['studio', 'gallery', 'spots', 'product']).name('preset').onChange(buildEnv);
   fEnv.add(state, 'envIntensity', 0.0, 4.0, 0.05).name('intensity').onChange(v => {
