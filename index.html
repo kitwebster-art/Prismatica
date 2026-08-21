@@ -676,6 +676,9 @@ function applyRenderQuality(name) {
   }
 }
 function setLiveQuality(name) {
+  const previousLensResolution = typeof activeLensResolution === 'function'
+    ? activeLensResolution()
+    : null;
   state.renderQuality = name;
   if (typeof ecoModeActive !== 'undefined' && ecoModeActive && name !== 'eco') {
     ecoModeActive = false;
@@ -683,6 +686,12 @@ function setLiveQuality(name) {
     syncEcoBtn();
   }
   applyRenderQuality(name);
+  const nextLensResolution = typeof activeLensResolution === 'function'
+    ? activeLensResolution()
+    : null;
+  if (previousLensResolution != null && nextLensResolution !== previousLensResolution) {
+    rebuildLenses();
+  }
   setStatus(`live quality: ${name} · exports unchanged`);
   guiRefresh();
 }
@@ -873,6 +882,10 @@ composer.addPass(lookPass);
 
 composer.addPass(new OutputPass());
 
+function livePostProcessingRequired() {
+  return !!(bloomPass.enabled || lookPass.enabled);
+}
+
 function renderFrame(timeOverride) {
   // Tick the grain time so the noise field shifts each frame. During offline
   // export we pass the frame's playback timestamp so grain advances at the
@@ -881,7 +894,15 @@ function renderFrame(timeOverride) {
   lookPass.uniforms.uTime.value = (timeOverride !== undefined)
     ? timeOverride
     : performance.now() * 0.001;
-  composer.render();
+  // The live visualizer normally runs with bloom and Look Grade disabled.
+  // Skip the half-float composer and fullscreen OutputPass in that neutral
+  // case. Offline exports retain the composer path so output encoding and
+  // deterministic render behaviour stay unchanged.
+  if (!offlineInProgress && !livePostProcessingRequired()) {
+    renderer.render(scene, camera);
+  } else {
+    composer.render();
+  }
 }
 
 function renderLiveFrame(settleTransmission = false) {
@@ -4084,9 +4105,21 @@ const shapeViewMaterial = new THREE.ShaderMaterial({
 let lensMesh = null, lensMeshB = null, lensMeshC = null;
 const SHAPE_VIEW_DEFAULT_RESOLUTION_MM = 1.0;
 const SHAPE_VIEW_MIN_RESOLUTION_MM = 0.5;
+const LIVE_MESH_MIN_RESOLUTION_MM = {
+  eco: 3.0,
+  balanced: 2.0,
+  high: 1.0,
+  ultra: 0.5,
+  'portfolio-mobile': 2.0,
+  'portfolio-high': 1.0,
+};
 
 function activeLensResolution() {
-  if (!state?.shapeView) return state.resolution;
+  if (!state?.shapeView) {
+    const requested = Math.max(0.5, Number(state?.resolution) || 1.0);
+    const liveMinimum = LIVE_MESH_MIN_RESOLUTION_MM[state?.renderQuality] || 1.0;
+    return Math.max(requested, liveMinimum);
+  }
   const inspect = Number.isFinite(state.shapeViewResolution)
     ? state.shapeViewResolution
     : SHAPE_VIEW_DEFAULT_RESOLUTION_MM;
@@ -4134,6 +4167,7 @@ const defaultStateSnapshot = () => JSON.parse(JSON.stringify({
   constructionCompare: false,      // show solid, hollow, and sheet side by side
   shapeCompare: false,             // show matched square and round assemblies together
   shapeCompareLayout: 'side_by_side', // side_by_side | top_bottom
+  assemblyView: 'square',          // square | round | compare; explicit fabrication/display mode
   distortionBoost: 0.0,
   roughness: 0.02,
   tint: '#ffffff',
@@ -5193,7 +5227,10 @@ const LOW_PROFILE_RIPPLE_PRESETS = {
     mirrorPanel: true, mirrorLens: true, panelSmooth: true, bgColor: '#050505',
     wallMaterial: 'polished', wallBrightness: 0.72, wallScale: 18,
     envPreset: 'gallery', envIntensity: 0.58, bloomEnabled: false,
-    lookSaturation: 1, lookContrast: 1.04, lookVignette: 0.02, lookGrain: 0,
+    // Keep the default fabrication view neutral so live rendering can bypass
+    // the half-float post-processing chain. Look Grade remains available when
+    // an authored presentation needs it, and offline exports are unchanged.
+    lookSaturation: 1, lookContrast: 1, lookVignette: 0, lookGrain: 0,
     lookSharpen: 0, lookLutMix: 1, lookLutPreset: 'none', compare: false,
   },
   'round sine ripple': {
@@ -5367,7 +5404,7 @@ function presetSnapshot() {
   const s = {};
   for (const k of [
     'lensType','lensShape','panelWidth','panelHeight','panelShape','resolution','smoothing','shapeScale','flatEdgeWidth','stepExportQuality','stepSurfacePreview','opticalCleanSurface','shapeViewStyle','shapeViewResolution','params',
-    'ior','dispersion','thickness','construction','rearDepth','rearScale','rearOffsetX','rearOffsetY','rearMinimumThickness','shellThickness','constructionCompare','shapeCompare','shapeCompareLayout','distortionBoost','roughness','tint',
+    'ior','dispersion','thickness','construction','rearDepth','rearScale','rearOffsetX','rearOffsetY','rearMinimumThickness','shellThickness','constructionCompare','shapeCompare','shapeCompareLayout','assemblyView','distortionBoost','roughness','tint',
     'panelMode','panelScale','panelSpeed','panelBrightness','panelHue','panelSat','panelDistance','pgLineWidth','pgFlow',
     'reflectiveEdgeEnabled','reflectiveEdgeReveal','reflectiveEdgeRoughness','reflectiveEdgeLights','reflectiveEdgeLightIntensity','casingDepth','ledPanelDepth','wallMountDepth',
     'patSharp','patScale','patDetail','patDistort','patSeed','patAxis','panelContrast','mirrorPanel','mirrorLens',
@@ -5490,7 +5527,14 @@ function applyPreset(p) {
   if (!('shapeCompare' in p)) state.shapeCompare = false;
   if (!('shapeCompareLayout' in p)) state.shapeCompareLayout = 'side_by_side';
   if (!['side_by_side', 'top_bottom'].includes(state.shapeCompareLayout)) state.shapeCompareLayout = 'side_by_side';
+  if (!('assemblyView' in p)) {
+    state.assemblyView = state.shapeCompare
+      ? 'compare'
+      : (state.lensShape === 'round' || state.panelShape === 'round' ? 'round' : 'square');
+  }
+  if (!['square','round','compare'].includes(state.assemblyView)) state.assemblyView = 'square';
   if (state.shapeCompare) {
+    state.assemblyView = 'compare';
     state.compare = false;
     state.constructionCompare = false;
     if (state.params && 'rear_compare_enabled' in state.params) state.params.rear_compare_enabled = false;
@@ -5658,12 +5702,53 @@ function installUndoTracking() {
 // whatever Kit has dialled in right now).
 // -------------------------------------------------------------------------
 const DEFAULTS_KEY = 'prismatica.defaults.v1';
+const DEFAULTS_SCHEMA_VERSION = 2;
+
+function migrateSavedDefaults(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { defaults: null, changed: false };
+  }
+  const defaults = JSON.parse(JSON.stringify(raw));
+  let changed = false;
+
+  // Saved studio defaults created before assemblyView existed can silently
+  // reopen the retired square + round comparison. Migrate only that legacy
+  // shape. Defaults saved with an explicit assemblyView remain authoritative,
+  // including an intentionally saved modern comparison.
+  if (!Object.prototype.hasOwnProperty.call(defaults, 'assemblyView')) {
+    if (defaults.shapeCompare === true) {
+      defaults.assemblyView = 'square';
+      defaults.shapeCompare = false;
+      defaults.lensShape = 'standard';
+      defaults.panelShape = 'rectangular';
+    } else {
+      defaults.assemblyView = defaults.lensShape === 'round' || defaults.panelShape === 'round'
+        ? 'round'
+        : 'square';
+    }
+    changed = true;
+  }
+  if (defaults._defaultsSchemaVersion !== DEFAULTS_SCHEMA_VERSION) {
+    defaults._defaultsSchemaVersion = DEFAULTS_SCHEMA_VERSION;
+    changed = true;
+  }
+  return { defaults, changed };
+}
+
 function loadSavedDefaults() {
-  try { return JSON.parse(localStorage.getItem(DEFAULTS_KEY) || 'null'); }
+  try {
+    const raw = JSON.parse(localStorage.getItem(DEFAULTS_KEY) || 'null');
+    const migrated = migrateSavedDefaults(raw);
+    if (migrated.changed && migrated.defaults) {
+      localStorage.setItem(DEFAULTS_KEY, JSON.stringify(migrated.defaults));
+    }
+    return migrated.defaults;
+  }
   catch { return null; }
 }
 function saveAsDefaults() {
   const snap = presetSnapshot();
+  snap._defaultsSchemaVersion = DEFAULTS_SCHEMA_VERSION;
   // Also capture Capture / scene fields that aren't in the standard preset snapshot.
   for (const k of [
     'renderQuality','recAspect','recResolution','recFps','recDuration','recLoop','renderSmooth','exportStability','motionBlurSamples','superDispersion','panelSmooth','watermarkText',
@@ -6150,6 +6235,9 @@ function setShapeComparison(enabled) {
     };
   }
   state.shapeCompare = next;
+  state.assemblyView = next
+    ? 'compare'
+    : (state.lensShape === 'round' || state.panelShape === 'round' ? 'round' : 'square');
   if (next) {
     state.compare = false;
     state.constructionCompare = false;
@@ -6161,6 +6249,26 @@ function setShapeComparison(enabled) {
   if (next) fitShapeCompareView();
   else restoreShapeCompareView();
   guiRefresh();
+}
+
+function setAssemblyView(mode) {
+  const next = ['square', 'round', 'compare'].includes(mode) ? mode : 'square';
+  state.assemblyView = next;
+  if (next === 'square') {
+    state.lensShape = 'standard';
+    state.panelShape = 'rectangular';
+  } else if (next === 'round') {
+    state.lensShape = 'round';
+    state.panelShape = 'round';
+    state.panelHeight = state.panelWidth;
+  }
+  setShapeComparison(next === 'compare');
+  if (typeof window.__updatePanelDimensionControls === 'function') {
+    window.__updatePanelDimensionControls();
+  }
+  syncShader();
+  guiRefresh();
+  setStatus(next === 'compare' ? 'square + round comparison' : `${next} assembly only`);
 }
 
 let rearSurfaceCompareCameraSnapshot = null;
@@ -6636,6 +6744,12 @@ async function doExportFabricatorCleanSTEP() {
     setStatus('verified STEP currently supports solid flat-backed lenses only · use STL for shell/sheet studies');
     return;
   }
+  const preflightError = fabricationExportPreflight(false);
+  if (preflightError) {
+    showStepExportToast(preflightError);
+    setStatus(preflightError);
+    return;
+  }
   try {
     if (location.protocol !== 'http:' && location.protocol !== 'https:') {
       showStepExportToast('Open the Railway app to use clean STEP export.');
@@ -6651,6 +6765,8 @@ async function doExportFabricatorCleanSTEP() {
     const cadState = {
       lensType: state.lensType,
       lensShape: state.lensShape,
+      panelShape: state.panelShape,
+      assemblyView: state.assemblyView,
       panelWidth: state.panelWidth,
       panelHeight: state.panelHeight,
       resolution: state.resolution,
@@ -6697,6 +6813,29 @@ function selectedFabricationParts() {
   };
 }
 
+function fabricationExportPreflight(includeAssembly) {
+  if (state.shapeCompare || state.assemblyView === 'compare') {
+    return 'Choose square only or round only before exporting fabrication CAD.';
+  }
+  const lensIsRound = lensFootprintFor(
+    state.lensType,
+    state.params,
+    state.panelWidth,
+    state.panelHeight,
+  ).kind === 'circle';
+  const panelIsRound = state.panelShape === 'round';
+  if (includeAssembly && lensIsRound !== panelIsRound) {
+    return 'Lens and LED panel footprints must match before exporting the assembly.';
+  }
+  if (state.assemblyView === 'square' && (lensIsRound || (includeAssembly && panelIsRound))) {
+    return 'Square-only export is selected, but a round footprint is still active.';
+  }
+  if (state.assemblyView === 'round' && (!lensIsRound || (includeAssembly && !panelIsRound))) {
+    return 'Round-only export is selected, but a square footprint is still active.';
+  }
+  return '';
+}
+
 function updateAssemblyExportInfo() {
   const selected = selectedFabricationParts();
   const count = Object.values(selected).filter(Boolean).length;
@@ -6707,6 +6846,12 @@ function updateAssemblyExportInfo() {
 async function doExportFabricatorAssemblySTEP() {
   if (state.construction !== 'solid_flat_back') {
     setStatus('fabrication assembly currently supports solid flat-backed lenses only');
+    return;
+  }
+  const preflightError = fabricationExportPreflight(true);
+  if (preflightError) {
+    showStepExportToast(preflightError);
+    setStatus(preflightError);
     return;
   }
   const exportParts = selectedFabricationParts();
@@ -6733,6 +6878,7 @@ async function doExportFabricatorAssemblySTEP() {
       panelWidth: state.panelWidth,
       panelHeight: state.panelHeight,
       panelShape: state.panelShape,
+      assemblyView: state.assemblyView,
       panelDistance: state.panelDistance,
       reflectiveEdgeReveal: state.reflectiveEdgeReveal,
       casingDepth: state.casingDepth,
@@ -7545,10 +7691,17 @@ normalizeState();
       rebuildLenses();
       guiRefresh();
     });
+  fA.add(state, 'assemblyView', {
+    'square only': 'square',
+    'round only': 'round',
+    'square + round': 'compare',
+  }).name('assembly view').onChange(setAssemblyView);
   fA.add(state, 'lensShape', {
-    'standard (lens type)': 'standard',
+    'square / standard': 'standard',
     round: 'round',
   }).name('footprint').onChange(() => {
+    state.assemblyView = state.lensShape === 'round' || state.panelShape === 'round' ? 'round' : 'square';
+    if (state.shapeCompare) setShapeComparison(false);
     rebuildLenses();
     guiRefresh();
     setStatus(`${lensFootprintLabel()} selected`);
@@ -7657,6 +7810,8 @@ normalizeState();
   }).name('shape').onChange((shape) => {
     state.panelShape = shape;
     if (shape === 'round') state.panelHeight = state.panelWidth;
+    state.assemblyView = state.lensShape === 'round' || shape === 'round' ? 'round' : 'square';
+    if (state.shapeCompare) setShapeComparison(false);
     syncPanelDimensionControls();
     syncShader();
     rebuildLenses();
@@ -10068,7 +10223,9 @@ window.__prismatica = {
   state, rebuildLenses, scene, camera, renderer, controls,
   ledMat, ledMatB, lensMaterial, lensMaterialB, reflectiveEdge, reflectiveEdgeB, reflectiveEdgeC, LENS_TYPES,
   syncReflectiveAssembly, selectedFabricationParts, updateAssemblyExportInfo,
-  applyShapeView, activeLensResolution, setRearSurfaceComparison, isRearSurfaceComparisonActive,
+  setAssemblyView, fabricationExportPreflight,
+  applyShapeView, activeLensResolution, livePostProcessingRequired,
+  setRearSurfaceComparison, isRearSurfaceComparisonActive,
   lensVertexCount: () => lensMesh?.geometry?.attributes?.position?.count || 0,
   humanScaleFigure, humanScaleFigureAsset, humanScaleCameraShot,
   humanScaleArtworkScreenBounds, humanScaleFigureScreenBounds,

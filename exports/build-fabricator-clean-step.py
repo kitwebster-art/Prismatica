@@ -129,6 +129,7 @@ VERIFIED_EQUATION_LENSES = {
     "round_sine_lens",
     "sine_wave_lens",
     "ripple_field",
+    "rounded_square_ripple",
     "gravitational_wave",
     "stepped_ripple",
     "torus_field",
@@ -321,6 +322,22 @@ LENS_DEFAULT_PARAMS = {
         "edge_taper_width": 70.0,
         "bulb_roundness": 1.0,
         "curve_strength": 1.0,
+    },
+    "rounded_square_ripple": {
+        "wavelength": 30.0,
+        "amplitude": 12.0,
+        "superellipse_power": 8.0,
+        "ripple_profile": "perfect_s_curve",
+        "ripple_curvature": 1.2,
+        "ripple_phase": 0.0,
+        "ridge_width": 0.46,
+        "ripple_contrast": 1.15,
+        "valley_lift": 0.04,
+        "edge_taper_width": 26.0,
+        "center_bulge_height": 8.0,
+        "center_bulge_radius": 48.0,
+        "center_bulge_curve": 1.4,
+        "center_bulge_shoulder": 0.25,
     },
     "gravitational_wave": {
         "wavelength": 58.0,
@@ -562,6 +579,47 @@ def morph_rings_height(x: float, y: float, state: dict) -> float:
     ridge_base = 0.5 * (1.0 + math.sin(tau * (d / wavelength + phase_shift)))
     ridge = ripple_profile01(ridge_base, ripple_curvature, ripple_profile)
     return amplitude * ridge * fade
+
+
+def rounded_square_ripple_height(x: float, y: float, state: dict) -> float:
+    """Exact Python port of the visualizer's Rounded Square Ripple field."""
+
+    width = float(state.get("panelWidth", WIDTH_MM))
+    height = float(state.get("panelHeight", HEIGHT_MM))
+    params = params_for(state)
+    scale = float(state.get("shapeScale") or 1.0)
+    if state.get("mirrorLens"):
+        x, y = abs(x), abs(y)
+    x *= scale
+    y *= scale
+
+    half_w = width * 0.5
+    half_h = height * 0.5
+    d_edge = min(half_w - abs(x), half_h - abs(y))
+    if d_edge <= 0.0:
+        return 0.0
+
+    wavelength = max(1.0, float(params.get("wavelength", 30.0) or 30.0))
+    amplitude = max(0.0, float(params.get("amplitude", 0.0) or 0.0))
+    exponent = max(2.0, min(20.0, float(params.get("superellipse_power", 8.0) or 8.0)))
+    curvature = max(0.25, float(params.get("ripple_curvature", 1.2) or 1.2))
+    profile = str(params.get("ripple_profile", "perfect_s_curve") or "perfect_s_curve")
+    phase = math.pi * 2.0 * float(params.get("ripple_phase", 0.0) or 0.0)
+    ridge_width = max(0.0, min(1.0, float(params.get("ridge_width", 0.46) or 0.46)))
+    contrast = max(0.1, float(params.get("ripple_contrast", 1.15) or 1.15))
+    valley_lift = max(0.0, min(0.8, float(params.get("valley_lift", 0.0) or 0.0)))
+    edge_taper = max(0.0, float(params.get("edge_taper_width", 0.0) or 0.0))
+
+    radius = (abs(x) ** exponent + abs(y) ** exponent) ** (1.0 / exponent)
+    wave_raw = 0.5 * (1.0 + math.cos(math.pi * 2.0 * radius / wavelength + phase))
+    wave = shape_ripple_value01(
+        ripple_profile01(wave_raw, curvature, profile),
+        ridge_width,
+        contrast,
+        valley_lift,
+    )
+    edge_env = 1.0 if edge_taper <= 0.0 else smootherstep01(d_edge / edge_taper)
+    return amplitude * wave * edge_env + center_bulge_height(radius, params)
 
 
 def sine_wave_lens_height(x: float, y: float, state: dict) -> float:
@@ -1169,6 +1227,7 @@ LENS_HEIGHT_FUNCTIONS = {
     "round_sine_lens": round_sine_lens_height,
     "sine_wave_lens": sine_wave_lens_height,
     "ripple_field": ripple_field_height,
+    "rounded_square_ripple": rounded_square_ripple_height,
     "gravitational_wave": gravitational_wave_height,
     "stepped_ripple": stepped_ripple_height,
     "torus_field": torus_field_height,
@@ -2634,8 +2693,8 @@ def main() -> int:
         f"- Visualizer mesh resolution setting: {state.get('resolution')} mm\n\n"
         "Optical surface cleanup:\n"
         "- Purpose: removes non-intentional local wobble/irregularity from the clear acrylic surface.\n"
-        "- This is applied to the stepped-ripple lens as a smooth radial profile before the CAD solid is built.\n"
-        f"- Enabled: {optical_cleanup.get('enabled', False)}\n"
+        "- Applied only when the selected lens equation defines a supported cleanup mode; mode 'off' means no adjustment.\n"
+        f"- Requested: {optical_cleanup.get('enabled', False)}\n"
         f"- Mode: {optical_cleanup.get('mode', 'unknown')}\n"
         f"- Max local cleanup adjustment: {float(optical_cleanup.get('max_adjustment_mm', 0.0) or 0.0):.3f} mm\n"
         f"- RMS cleanup adjustment: {float(optical_cleanup.get('rms_adjustment_mm', 0.0) or 0.0):.3f} mm\n\n"
